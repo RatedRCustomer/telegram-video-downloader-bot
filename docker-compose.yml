@@ -1,0 +1,30 @@
+# docker-compose.yml
+
+services:
+  yt-dlp-api:
+    build: ./yt-dlp-service
+    container_name: telegram-yt-dlp-api
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./downloads:/downloads
+    networks:
+      - bot-network
+
+  telegram-bot:
+    build: ./bot
+    container_name: telegram-video-bot
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - YT_DLP_API_URL=http://yt-dlp-api:8081
+    volumes:
+      - /opt/docker/telegram-bot/downloads:/downloads
+    depends_on:
+      - yt-dlp-api
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge

@@ -1,0 +1,25 @@
+# Environment files
+.env
+
+# Logs
+logs/
+*.log
+
+# Downloads
+downloads/
+
+# Docker volumes
+config/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
