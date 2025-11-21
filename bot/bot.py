@@ -2,14 +2,12 @@ import os
 import requests
 import telebot
 import time
-import json
 import logging
 import validators
 from pathlib import Path
 from telebot import types
-import threading
+from collections import defaultdict
 
-# Налаштування логування
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -18,233 +16,453 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
 logger = logging.getLogger(__name__)
 
-# Конфігурація
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 YT_DLP_API_URL = os.getenv('YT_DLP_API_URL', 'http://yt-dlp-api:8081')
-MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 50000000))  # 50MB
-DOWNLOAD_PATH = '/downloads'
+MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 50000000))
 
 bot = telebot.TeleBot(TOKEN)
 
-# Підтримувані домени
 SUPPORTED_DOMAINS = [
-    'tiktok.com',
+    'tiktok.com', 'vm.tiktok.com',
     'instagram.com', 
-    'youtube.com',
-    'youtu.be',
-    'twitter.com',
-    'x.com',
-    'facebook.com',
-    'fb.watch',
-    'reddit.com'
+    'youtube.com', 'youtu.be',
+    'twitter.com', 'x.com',
+    'facebook.com', 'fb.watch',
+    'reddit.com', 'redd.it',
+    'pinterest.com', 'pin.it'
 ]
 
+# Rate limiting для груп
+user_last_request = defaultdict(float)
+group_last_request = defaultdict(float)
+user_urls = {}
+
+def is_rate_limited(message):
+    """Перевіряє rate limiting"""
+    current_time = time.time()
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    # Для користувачів - 1 запит на 30 секунд
+    if current_time - user_last_request[user_id] < 30:
+        return True
+    
+    # Для груп - 1 запит на 10 секунд
+    if message.chat.type in ['group', 'supergroup']:
+        if current_time - group_last_request[chat_id] < 10:
+            return True
+        group_last_request[chat_id] = current_time
+    
+    user_last_request[user_id] = current_time
+    return False
+
 def is_supported_url(url):
-    """Перевіряє чи підтримується URL"""
     if not validators.url(url):
         return False
-    
     return any(domain in url.lower() for domain in SUPPORTED_DOMAINS)
 
-def download_video(url):
-    """Завантажує відео через yt-dlp API"""
-    try:
-        # Додаємо завдання до черги
-        response = requests.post(
-            f"{YT_DLP_API_URL}/add",
-            json={
-                "url": url,
-                "quality": "best[height<=720]",  # Обмежуємо якість для економії
-                "format": "mp4"
-            },
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            logger.info(f"Successfully queued download for: {url}")
-            return True
-        else:
-            logger.error(f"Failed to queue download: {response.status_code}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Error downloading video: {str(e)}")
-        return False
-
-def find_downloaded_file(url):
-    """Шукає завантажений файл"""
-    downloads = Path(DOWNLOAD_PATH)
-    
-    # Шукаємо файли які були створені в останні 5 хвилин
-    recent_files = []
-    for file_path in downloads.glob("*"):
-        if file_path.is_file() and time.time() - file_path.stat().st_mtime < 300:
-            recent_files.append(file_path)
-    
-    # Повертаємо найновіший файл
-    if recent_files:
-        return max(recent_files, key=lambda x: x.stat().st_mtime)
-    
-    return None
+def extract_urls_from_message(text):
+    """Витягує всі URL з повідомлення"""
+    words = text.split()
+    urls = [word for word in words if is_supported_url(word)]
+    return urls
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    """Команда привітання"""
     welcome_text = """
-🎥 **Telegram Video Downloader Bot**
+🎥 *Telegram Video Downloader Bot v3.0*
 
-Надішліть мені посилання на відео і я завантажу його для вас!
+Надішліть посилання і оберіть параметри!
 
-**Підтримувані платформи:**
+✅ *Підтримувані платформи:*
+• YouTube/Shorts (з субтитрами 🇺🇦)
 • TikTok
-• Instagram Reels/Posts  
-• YouTube/YouTube Shorts
+• Instagram Reels (mobile-friendly!)
 • Twitter/X
 • Facebook
 • Reddit
+• Pinterest
 
-**Обмеження:**
-• Максимальний розмір файлу: 50MB
-• Підтримується тільки відео контент
+🎛️ *Можливості:*
+• 🎵 Audio-only (MP3)
+• 📊 Вибір якості (360p-1080p)
+• 🇺🇦 Українські субтитри
+• ⚡ Smart cache (миттєво!)
+• 👥 Працює в групах!
 
-Просто надішліть посилання і чекайте! ⏳
-    """
-    
-    bot.reply_to(message, welcome_text, parse_mode='Markdown')
+📋 *Обмеження:*
+• Max файл: 50MB
+• Rate limit: 30s/user, 10s/group
 
-@bot.message_handler(func=lambda message: True)
-def handle_url(message):
-    """Обробка URL від користувача"""
-    url = message.text.strip()
-    
-    # Перевіряємо валідність URL
-    if not is_supported_url(url):
-        bot.reply_to(
-            message, 
-            "❌ Будь ласка, надішліть валідне посилання на відео з підтримуваних платформ:\n"
-            "TikTok, Instagram, YouTube, Twitter/X, Facebook, Reddit"
-        )
-        return
-    
-    # Повідомляємо про початок завантаження
-    status_msg = bot.reply_to(message, "⏳ Завантажую відео, зачекайте...")
-    
+*Команди:*
+/audio - тільки аудіо
+/stats - статистика кешу
+/group_help - довідка для груп
+
+Просто надішліть посилання! ⏳
+"""
     try:
-        # Завантажуємо відео через новий API
-        response = requests.post(
-            f"{YT_DLP_API_URL}/add",
-            json={"url": url},
-            timeout=10
-        )
+        bot.reply_to(message, welcome_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Welcome message error: {e}")
+        # Fallback без Markdown
+        bot.reply_to(message, welcome_text.replace('*', ''))
+
+@bot.message_handler(commands=['group_help'])
+def group_help(message):
+    """Спеціальна довідка для груп"""
+    help_text = """
+👥 **Bot у групі:**
+
+✅ **Автоматичне завантаження:**
+Просто надішліть посилання - бот автоматично завантажить відео!
+
+⚙️ **Для опцій (якість/аудіо):**
+• Reply на посилання і напишіть `/audio`
+• Або використайте inline buttons в приватному чаті
+
+⏰ **Обмеження:**
+• 30 сек між запитами (користувач)
+• 10 сек між запитами (група)
+• Max 50MB файли
+
+✅ **Підтримуються:** YouTube, TikTok, Instagram, Twitter, Facebook, Reddit, Pinterest
+
+⚡ Cache економить час - повторні запити миттєві!
+"""
+    bot.reply_to(message, help_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['audio', 'mp3'])
+def handle_audio_command(message):
+    """Команда для завантаження аудіо"""
+    try:
+        # Витягуємо URL з команди або reply
+        if message.reply_to_message and message.reply_to_message.text:
+            urls = extract_urls_from_message(message.reply_to_message.text)
+        else:
+            parts = message.text.split(' ', 1)
+            urls = extract_urls_from_message(parts[1]) if len(parts) > 1 else []
         
+        if not urls:
+            bot.reply_to(message, "❌ URL не знайдено. Використання: /audio https://youtube.com/...")
+            return
+        
+        if is_rate_limited(message):
+            bot.reply_to(message, "⏰ Зачекайте 30 секунд перед наступним запитом")
+            return
+        
+        # В групах - автоматично audio без кнопок
+        if message.chat.type in ['group', 'supergroup']:
+            download_content(message, urls[0], quality='720p', format='audio')
+        else:
+            # В приватних чатах - показуємо кнопки
+            user_urls[message.from_user.id] = urls[0]
+            download_content(message, urls[0], quality='720p', format='audio')
+        
+    except Exception as e:
+        logger.error(f"Audio command error: {e}")
+        bot.reply_to(message, "❌ Помилка обробки команди")
+
+@bot.message_handler(commands=['stats'])
+def show_cache_stats(message):
+    """Показує статистику кешу"""
+    try:
+        response = requests.get(f"{YT_DLP_API_URL}/cache/stats", timeout=5)
         if response.status_code == 200:
             data = response.json()
-            download_id = data.get('id')
             
+            stats_text = f"""
+📊 **Статистика кешу**
+
+💾 **Всього:**
+• Відео в кеші: {data['total_cached']}
+• Розмір: {data['total_size_mb']:.2f} MB
+• Cache hits: {data['cache_hits_saved']}
+
+📈 **По платформам:**
+"""
+            for platform, stats in data.get('by_platform', {}).items():
+                stats_text += f"• {platform}: {stats['count']} ({stats['size_mb']:.2f} MB)\n"
+            
+            stats_text += "\n⚡ Cache hits економить час і трафік!"
+            
+            bot.reply_to(message, stats_text, parse_mode='Markdown')
+        else:
+            bot.reply_to(message, "❌ Не вдалося отримати статистику")
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        bot.reply_to(message, "❌ Помилка з'єднання з API")
+
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    """Обробка всіх повідомлень (приватні + групи)"""
+    urls = extract_urls_from_message(message.text)
+    
+    if not urls:
+        return
+    
+    # Rate limiting
+    if is_rate_limited(message):
+        if message.chat.type == 'private':
+            bot.reply_to(message, "⏰ Зачекайте 30 секунд перед наступним запитом")
+        return
+    
+    url = urls[0]
+    
+    # В ГРУПАХ - автоматичне завантаження БЕЗ кнопок (720p video)
+    if message.chat.type in ['group', 'supergroup']:
+        logger.info(f"Group request from {message.chat.title}: {url}")
+        download_content(message, url, quality='720p', format='video', show_buttons=False)
+        return
+    
+    # В ПРИВАТНИХ ЧАТАХ - показуємо inline buttons
+    user_urls[message.from_user.id] = url
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🎥 720p (рекомендовано)", callback_data="quality_720_video"),
+        types.InlineKeyboardButton("💎 1080p", callback_data="quality_1080_video")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📱 480p (мобільні)", callback_data="quality_480_video"),
+        types.InlineKeyboardButton("⚡ 360p (швидко)", callback_data="quality_360_video")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🎵 Аудіо (MP3)", callback_data="quality_audio_audio")
+    )
+    
+    bot.reply_to(message, "⚙️ Оберіть формат завантаження:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('quality_'))
+def handle_quality_callback(call):
+    """Обробка вибору якості"""
+    try:
+        parts = call.data.split('_')
+        quality = parts[1] + 'p' if parts[2] == 'video' else parts[1]
+        format = parts[2]
+        
+        user_id = call.from_user.id
+        url = user_urls.get(user_id)
+        
+        if not url:
+            bot.answer_callback_query(call.id, "❌ URL не знайдено. Надішліть заново.")
+            return
+        
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        
+        quality_text = {
+            'audio': '🎵 MP3 аудіо',
+            '360p': '⚡ 360p відео',
+            '480p': '📱 480p відео',
+            '720p': '🎥 720p відео',
+            '1080p': '💎 1080p відео'
+        }.get(quality, quality)
+        
+        bot.answer_callback_query(call.id, f"✅ Обрано: {quality_text}")
+        download_content(call.message, url, quality, format, show_buttons=True)
+        
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        bot.answer_callback_query(call.id, "❌ Помилка")
+
+def download_content(message, url, quality='720p', format='video', show_buttons=False):
+    """Завантажує контент з обраними параметрами"""
+    status_msg = bot.reply_to(message, "⏳ Перевіряю кеш...")
+
+    try:
+        logger.info(f"Request: {url} (quality={quality}, format={format})")
+        response = requests.post(
+            f"{YT_DLP_API_URL}/add",
+            json={"url": url, "quality": quality, "format": format},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            
+            # CACHE HIT!
+            if data.get('cached'):
+                logger.info(f"✅ CACHE HIT for {url}")
+                
+                cache_emoji = '⚡'
+                if message.chat.type in ['group', 'supergroup']:
+                    cache_emoji = '💾'  # В групах інша емодзі
+                
+                bot.edit_message_text(
+                    f"{cache_emoji} Кеш! Відправляю...",
+                    message.chat.id,
+                    status_msg.message_id
+                )
+                
+                send_file_from_cache(message, data, status_msg)
+                return
+            
+            download_id = data.get('id')
+            logger.info(f"Queued: {download_id}")
+            
+            format_emoji = '🎵' if format == 'audio' else '🎥'
             bot.edit_message_text(
-                "📥 Відео додано до черги. Обробляю...",
+                f"{format_emoji} Завантажую {quality}...",
                 message.chat.id,
                 status_msg.message_id
             )
-            
-            # Чекаємо завантаження (максимум 3 хвилини)
-            for i in range(36):  # 36 * 5 секунд = 3 хвилини
+
+            # Polling
+            for i in range(36):
                 time.sleep(5)
                 
-                # Перевіряємо статус завантаження
-                status_response = requests.get(f"{YT_DLP_API_URL}/status/{download_id}")
+                status_response = requests.get(f"{YT_DLP_API_URL}/status/{download_id}", timeout=5)
+                
                 if status_response.status_code == 200:
                     status_data = status_response.json()
                     
                     if status_data['status'] == 'completed':
-                        file_path = Path(status_data['file_path'])
-                        
-                        if file_path.exists():
-                            # Перевіряємо розмір файлу
-                            if file_path.stat().st_size > MAX_FILE_SIZE:
-                                bot.edit_message_text(
-                                    f"❌ Файл занадто великий ({file_path.stat().st_size // 1024 // 1024}MB). "
-                                    f"Максимум: {MAX_FILE_SIZE // 1024 // 1024}MB",
-                                    message.chat.id,
-                                    status_msg.message_id
-                                )
-                                file_path.unlink(missing_ok=True)
-                                return
-                            
-                            # Відправляємо файл
-                            bot.edit_message_text(
-                                "📤 Відправляю відео...",
-                                message.chat.id,
-                                status_msg.message_id
-                            )
-                            
-                            with open(file_path, 'rb') as video:
-                                bot.send_video(
-                                    message.chat.id,
-                                    video,
-                                    caption=f"🎥 {status_data.get('title', 'Завантажене відео')}\n\n📎 {url}",
-                                    reply_to_message_id=message.message_id
-                                )
-                            
-                            # Видаляємо статусне повідомлення та файл
-                            bot.delete_message(message.chat.id, status_msg.message_id)
-                            file_path.unlink(missing_ok=True)
-                            
-                            logger.info(f"Successfully sent video for URL: {url}")
-                            return
+                        send_downloaded_content(message, status_data, status_msg)
+                        return
                         
                     elif status_data['status'] == 'error':
+                        error_msg = status_data.get('error', 'Unknown error')
                         bot.edit_message_text(
-                            f"❌ Помилка завантаження: {status_data.get('error', 'Unknown error')}",
+                            f"❌ Помилка: {error_msg[:100]}",
                             message.chat.id,
                             status_msg.message_id
                         )
                         return
                 
-                # Оновлюємо статус кожні 15 секунд
-                if i % 3 == 0:
+                if i % 3 == 0 and i > 0:
                     dots = "." * ((i // 3) % 4)
                     bot.edit_message_text(
-                        f"⏳ Обробляю відео{dots}",
+                        f"{format_emoji} Обробляю{dots} ({i*5}s)",
                         message.chat.id,
                         status_msg.message_id
                     )
-            
-            # Таймаут
+
             bot.edit_message_text(
-                "⏰ Час очікування вичерпано. Відео можливо завантажилося, спробуйте ще раз.",
+                "⏰ Таймаут. Спробуйте ще раз.",
                 message.chat.id,
                 status_msg.message_id
             )
-            
-        else:
+
+        elif response.status_code == 429:
             bot.edit_message_text(
-                "❌ Не вдалося додати відео до черги завантаження.",
+                "⏸️ Сервер зайнятий. Зачекайте хвилину.",
                 message.chat.id,
                 status_msg.message_id
             )
-            
+
     except Exception as e:
-        logger.error(f"Error processing URL {url}: {str(e)}")
+        logger.error(f"Error: {e}")
         bot.edit_message_text(
-            "❌ Виникла помилка при обробці відео. Спробуйте ще раз.",
+            "❌ Помилка. Спробуйте ще раз.",
             message.chat.id,
             status_msg.message_id
         )
 
+def send_file_from_cache(message, data, status_msg):
+    """Відправляє файл з кешу"""
+    try:
+        file_path = Path(data['file_path'])
+        format = data.get('format', 'video')
+        
+        if not file_path.exists():
+            bot.edit_message_text("❌ Кеш файл не знайдено", message.chat.id, status_msg.message_id)
+            return
+        
+        # В групах - мінімум тексту
+        if message.chat.type in ['group', 'supergroup']:
+            bot.edit_message_text("📤 Відправляю...", message.chat.id, status_msg.message_id)
+        else:
+            bot.edit_message_text("📤 Відправляю з кешу...", message.chat.id, status_msg.message_id)
+        
+        caption = f"⚡ Кеш" if message.chat.type in ['group', 'supergroup'] else f"🎵 {data['title']}\n\n⚡ Кеш"
+        
+        if format == 'audio':
+            with open(file_path, 'rb') as audio:
+                bot.send_audio(
+                    message.chat.id,
+                    audio,
+                    caption=caption,
+                    reply_to_message_id=message.message_id
+                )
+        else:
+            with open(file_path, 'rb') as video:
+                bot.send_video(
+                    message.chat.id,
+                    video,
+                    caption=caption,
+                    reply_to_message_id=message.message_id
+                )
+        
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        logger.info(f"✅ Sent from cache: {data.get('url', 'unknown')}")
+        
+    except Exception as e:
+        logger.error(f"Cache send error: {e}")
+        bot.edit_message_text("❌ Помилка відправки", message.chat.id, status_msg.message_id)
+
+def send_downloaded_content(message, status_data, status_msg):
+    """Відправляє новозавантажений контент"""
+    file_path = Path(status_data.get('file_path'))
+    if not file_path.exists():
+        bot.edit_message_text("❌ Файл не знайдено", message.chat.id, status_msg.message_id)
+        return
+
+    try:
+        file_size = file_path.stat().st_size
+        title = status_data.get('title', 'Video')
+        format = status_data.get('format', 'video')
+
+        if file_size > MAX_FILE_SIZE:
+            bot.edit_message_text(
+                f"❌ Файл завеликий ({file_size // 1024 // 1024}MB). Max: 50MB",
+                message.chat.id,
+                status_msg.message_id
+            )
+            return
+
+        bot.edit_message_text("📤 Відправляю...", message.chat.id, status_msg.message_id)
+
+        # В групах - короткий caption
+        if message.chat.type in ['group', 'supergroup']:
+            caption = f"✅ Готово"
+        else:
+            caption = f"{'🎵' if format == 'audio' else '🎥'} {title}"
+
+        if format == 'audio':
+            with open(file_path, 'rb') as audio:
+                bot.send_audio(
+                    message.chat.id,
+                    audio,
+                    caption=caption,
+                    reply_to_message_id=message.message_id
+                )
+        else:
+            with open(file_path, 'rb') as video:
+                bot.send_video(
+                    message.chat.id,
+                    video,
+                    caption=caption,
+                    reply_to_message_id=message.message_id
+                )
+
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        logger.info(f"✅ Sent: {status_data.get('url', 'unknown')}")
+
+    except Exception as e:
+        logger.error(f"Send error: {e}")
+        bot.edit_message_text("❌ Помилка відправки", message.chat.id, status_msg.message_id)
 
 if __name__ == '__main__':
-    logger.info("Starting Telegram Video Bot...")
+    logger.info("🚀 Starting Telegram Video Bot v3.0 (Groups enabled)...")
     logger.info(f"API URL: {YT_DLP_API_URL}")
     
-    # Перевіряємо доступність API
     try:
-        response = requests.get(f"{YT_DLP_API_URL}", timeout=5)
-        logger.info("YT-DLP API is accessible")
+        response = requests.get(f"{YT_DLP_API_URL}/health", timeout=5)
+        logger.info("✅ YT-DLP API accessible")
     except:
-        logger.warning("YT-DLP API is not accessible yet")
-    
-    # Запускаємо бота
+        logger.warning("⚠️ YT-DLP API not accessible yet")
+
     bot.polling(none_stop=True, interval=0, timeout=60)

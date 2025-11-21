@@ -1,0 +1,10 @@
+yt-dlp[default]>=2025.10.22
+flask
+flask-limiter
+requests
+gallery-dl
+prometheus-client
+curl-cffi
+brotli
+pycryptodomex
+websockets
