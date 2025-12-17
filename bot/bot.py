@@ -4,9 +4,36 @@ import telebot
 import time
 import logging
 import validators
+import subprocess
+import json
 from pathlib import Path
 from telebot import types
 from collections import defaultdict
+
+
+def get_video_metadata(file_path):
+    """Отримує метадані відео (ширина, висота, тривалість) через ffprobe"""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_format', '-show_streams', str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    width = stream.get('width', 0)
+                    height = stream.get('height', 0)
+                    duration = float(data.get('format', {}).get('duration', 0))
+                    return {
+                        'width': width,
+                        'height': height,
+                        'duration': int(duration)
+                    }
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to get video metadata: {e}")
+    return None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,15 +100,15 @@ def extract_urls_from_message(text):
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = """
-🎥 *Telegram Video Downloader Bot v3.0*
+🎥 *Telegram Video Downloader Bot v3.1*
 
 Надішліть посилання і оберіть параметри!
 
 ✅ *Підтримувані платформи:*
 • YouTube/Shorts (з субтитрами 🇺🇦)
 • TikTok
-• Instagram Reels (mobile-friendly!)
-• Twitter/X
+• Instagram Reels
+• Twitter/X (тільки пости з відео)
 • Facebook
 • Reddit
 • Pinterest
@@ -92,6 +119,7 @@ def send_welcome(message):
 • 🇺🇦 Українські субтитри
 • ⚡ Smart cache (миттєво!)
 • 👥 Працює в групах!
+• 📐 Збереження оригінального формату
 
 📋 *Обмеження:*
 • Max файл: 50MB
@@ -325,8 +353,17 @@ def download_content(message, url, quality='720p', format='video', show_buttons=
                         
                     elif status_data['status'] == 'error':
                         error_msg = status_data.get('error', 'Unknown error')
+
+                        # Форматуємо повідомлення про помилку залежно від типу
+                        if 'немає відео' in error_msg.lower() or 'no video' in error_msg.lower():
+                            display_msg = "📝 Цей пост не містить відео"
+                        elif 'не вдалося' in error_msg.lower():
+                            display_msg = f"❌ {error_msg}"
+                        else:
+                            display_msg = f"❌ Помилка: {error_msg[:100]}"
+
                         bot.edit_message_text(
-                            f"❌ Помилка: {error_msg[:100]}",
+                            display_msg,
                             message.chat.id,
                             status_msg.message_id
                         )
@@ -366,19 +403,19 @@ def send_file_from_cache(message, data, status_msg):
     try:
         file_path = Path(data['file_path'])
         format = data.get('format', 'video')
-        
+
         if not file_path.exists():
             bot.edit_message_text("❌ Кеш файл не знайдено", message.chat.id, status_msg.message_id)
             return
-        
+
         # В групах - мінімум тексту
         if message.chat.type in ['group', 'supergroup']:
             bot.edit_message_text("📤 Відправляю...", message.chat.id, status_msg.message_id)
         else:
             bot.edit_message_text("📤 Відправляю з кешу...", message.chat.id, status_msg.message_id)
-        
+
         caption = f"⚡ Кеш" if message.chat.type in ['group', 'supergroup'] else f"🎵 {data['title']}\n\n⚡ Кеш"
-        
+
         if format == 'audio':
             with open(file_path, 'rb') as audio:
                 bot.send_audio(
@@ -388,17 +425,25 @@ def send_file_from_cache(message, data, status_msg):
                     reply_to_message_id=message.message_id
                 )
         else:
+            # Отримуємо метадані відео для коректного відображення
+            metadata = get_video_metadata(file_path)
             with open(file_path, 'rb') as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    caption=caption,
-                    reply_to_message_id=message.message_id
-                )
-        
+                send_kwargs = {
+                    'chat_id': message.chat.id,
+                    'video': video,
+                    'caption': caption,
+                    'reply_to_message_id': message.message_id,
+                    'supports_streaming': True
+                }
+                if metadata:
+                    send_kwargs['width'] = metadata['width']
+                    send_kwargs['height'] = metadata['height']
+                    send_kwargs['duration'] = metadata['duration']
+                bot.send_video(**send_kwargs)
+
         bot.delete_message(message.chat.id, status_msg.message_id)
         logger.info(f"✅ Sent from cache: {data.get('url', 'unknown')}")
-        
+
     except Exception as e:
         logger.error(f"Cache send error: {e}")
         bot.edit_message_text("❌ Помилка відправки", message.chat.id, status_msg.message_id)
@@ -440,13 +485,21 @@ def send_downloaded_content(message, status_data, status_msg):
                     reply_to_message_id=message.message_id
                 )
         else:
+            # Отримуємо метадані відео для коректного відображення
+            metadata = get_video_metadata(file_path)
             with open(file_path, 'rb') as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    caption=caption,
-                    reply_to_message_id=message.message_id
-                )
+                send_kwargs = {
+                    'chat_id': message.chat.id,
+                    'video': video,
+                    'caption': caption,
+                    'reply_to_message_id': message.message_id,
+                    'supports_streaming': True
+                }
+                if metadata:
+                    send_kwargs['width'] = metadata['width']
+                    send_kwargs['height'] = metadata['height']
+                    send_kwargs['duration'] = metadata['duration']
+                bot.send_video(**send_kwargs)
 
         bot.delete_message(message.chat.id, status_msg.message_id)
         logger.info(f"✅ Sent: {status_data.get('url', 'unknown')}")
@@ -456,7 +509,7 @@ def send_downloaded_content(message, status_data, status_msg):
         bot.edit_message_text("❌ Помилка відправки", message.chat.id, status_msg.message_id)
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Telegram Video Bot v3.0 (Groups enabled)...")
+    logger.info("🚀 Starting Telegram Video Bot v3.1 (Groups enabled)...")
     logger.info(f"API URL: {YT_DLP_API_URL}")
     
     try:

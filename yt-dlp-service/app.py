@@ -176,21 +176,61 @@ class DownloadManager:
 
 download_manager = DownloadManager()
 
+def check_has_video(url, platform):
+    """Перевіряє чи є відео в URL (особливо для Twitter)"""
+    try:
+        check_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
+
+        with yt_dlp.YoutubeDL(check_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+            if info is None:
+                return False, "Не вдалося отримати інформацію"
+
+            # Перевіряємо наявність відео форматів
+            formats = info.get('formats', [])
+            has_video = any(f.get('vcodec', 'none') != 'none' for f in formats)
+
+            if not has_video:
+                # Додаткова перевірка для Twitter
+                if platform == 'twitter':
+                    return False, "У цьому твіті немає відео"
+                return False, "Відео не знайдено"
+
+            return True, info.get('title', 'Video')
+
+    except Exception as e:
+        error_msg = str(e)
+        if 'No video could be found' in error_msg:
+            return False, "У цьому твіті немає відео"
+        return False, f"Помилка перевірки: {error_msg[:100]}"
+
+
 def get_platform_options(platform, download_id, quality='720p', format='video'):
-    """Оптимізовані налаштування для кожної платформи"""
-    
+    """Оптимізовані налаштування для кожної платформи - БЕЗ перекодування"""
+
     base_opts = {
         'outtmpl': f'/downloads/{download_id}_%(title)s.%(ext)s',
         'ignoreerrors': False,
+        'quiet': False,
+        'no_warnings': False,
+        # Оптимізація швидкості
+        'concurrent_fragment_downloads': 4,
+        'buffersize': 1024 * 16,
+        'http_chunk_size': 10485760,  # 10MB chunks
     }
-    
+
     height_limit = {
         '360p': 360,
         '480p': 480,
         '720p': 720,
         '1080p': 1080
     }.get(quality, 720)
-    
+
     # AUDIO-ONLY режим
     if format == 'audio':
         return {**base_opts,
@@ -201,94 +241,67 @@ def get_platform_options(platform, download_id, quality='720p', format='video'):
                 'preferredquality': '192',
             }]
         }
-    
-    # INSTAGRAM
+
+    # INSTAGRAM - БЕЗ перекодування, зберігаємо оригінальний формат
     if platform == 'instagram':
         return {**base_opts,
             'format': f'best[height<={height_limit}]/best',
-            'merge_output_format': 'mp4',
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en', 'ru'],
-            'embedsubtitles': True,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }, {
-                'key': 'FFmpegEmbedSubtitle',
-            }],
-            'postprocessor_args': {
-                'videoconvertor': [
-                    '-c:v', 'libx264',
-                    '-preset', 'medium',
-                    '-crf', '23',
-                    '-profile:v', 'baseline',
-                    '-level', '3.0',
-                    '-pix_fmt', 'yuv420p',
-                    '-bf', '0',
-                    '-refs', '1',
-                    '-g', '30',
-                    '-sc_threshold', '0',
-                    '-movflags', '+faststart',
-                    '-maxrate', '2M',
-                    '-bufsize', '4M',
-                    '-c:a', 'aac',
-                    '-strict', 'experimental',
-                    '-ar', '44100',
-                    '-ac', '2',
-                    '-b:a', '128k',
-                    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
-                ]
-            }
+            # Не перекодуємо - зберігаємо оригінальну якість і пропорції
         }
-    
-    # TIKTOK
+
+    # TIKTOK - зберігаємо оригінальний формат
     elif platform == 'tiktok':
         return {**base_opts,
             'format': f'best[height<={height_limit}]/best',
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
-            'embedsubtitles': True,
-            'extractor_args': {
-                'tiktok': {
-                    'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'
-                }
-            }
         }
-    
-    # REDDIT
+
+    # TWITTER - зберігаємо оригінальний формат
+    elif platform == 'twitter':
+        return {**base_opts,
+            'format': f'best[height<={height_limit}]/best',
+        }
+
+    # REDDIT - може потребувати merge
     elif platform == 'reddit':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/bestvideo+bestaudio/best',
+            'format': f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best',
             'merge_output_format': 'mp4',
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
-            'embedsubtitles': True
         }
-    
-    # YOUTUBE
+
+    # YOUTUBE - може потребувати merge
     elif platform == 'youtube':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/bestvideo+bestaudio/best',
+            'format': f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best',
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': ['uk', 'en', 'ru'],
-            'embedsubtitles': True,
             'merge_output_format': 'mp4'
         }
-    
+
     # PINTEREST
     elif platform == 'pinterest':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/bestvideo+bestaudio/best'
+            'format': f'best[height<={height_limit}]/best'
         }
-    
-    # DEFAULT
+
+    # FACEBOOK
+    elif platform == 'facebook':
+        return {**base_opts,
+            'format': f'best[height<={height_limit}]/best',
+        }
+
+    # DEFAULT - зберігаємо оригінальний формат
     else:
         return {**base_opts,
             'format': f'best[height<={height_limit}]/best',
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
-            'embedsubtitles': True
         }
 
 def download_with_ytdlp(url, download_id, platform, quality='720p', format='video'):
@@ -385,21 +398,34 @@ def download_worker(url, download_id, quality='720p', format='video'):
     try:
         downloads[download_id]['status'] = 'downloading'
         platform = downloads[download_id]['platform']
-        
+
         print(f"Starting download from {platform}: {url} (quality={quality}, format={format})")
-        
+
+        # Для Twitter - перевіряємо наявність відео ПЕРЕД завантаженням
+        if platform == 'twitter' and format == 'video':
+            print(f"Checking if Twitter post has video: {url}")
+            has_video, result_msg = check_has_video(url, platform)
+            if not has_video:
+                print(f"Twitter post has no video: {url} - {result_msg}")
+                downloads[download_id]['status'] = 'error'
+                downloads[download_id]['error'] = result_msg
+                # PROMETHEUS: Track failed Twitter downloads
+                downloads_failed.labels(platform='twitter', reason='no_video').inc()
+                return
+
         success = download_with_ytdlp(url, download_id, platform, quality, format)
-        
+
         if not success and format == 'video' and platform in ['tiktok', 'reddit', 'pinterest', 'instagram']:
             print(f"YT-DLP failed, trying gallery-dl for {platform}")
             success = download_with_gallery_dl(url, download_id, platform)
-        
+
         if not success:
             downloads[download_id]['status'] = 'error'
-            downloads[download_id]['error'] = f'Both yt-dlp and gallery-dl failed for {platform}'
-            
+            downloads[download_id]['error'] = f'Не вдалося завантажити з {platform}'
+            downloads_failed.labels(platform=platform, reason='download_failed').inc()
+
     except Exception as e:
-        downloads[download_id]['status'] = 'error'  
+        downloads[download_id]['status'] = 'error'
         downloads[download_id]['error'] = str(e)
         print(f"Error downloading {url}: {e}")
 
@@ -525,7 +551,7 @@ def cache_stats():
 def health_check():
     return jsonify({
         'status': 'ok',
-        'version': 'v3.0-cached',
+        'version': 'v3.1',
         'yt_dlp_version': yt_dlp.version.__version__,
         'system': {
             'active_downloads': download_manager.active_count,
@@ -539,7 +565,8 @@ def health_check():
             'Audio extraction (MP3)',
             'Quality selection (360p-1080p)',
             'Ukrainian subtitles',
-            'Mobile-optimized encoding',
+            'Original format preserved',
+            'Twitter video pre-check',
             '7 platforms support'
         ],
         'supported_platforms': ['YouTube', 'Instagram', 'Twitter/X', 'Facebook', 'TikTok', 'Reddit', 'Pinterest']
@@ -567,7 +594,7 @@ def metrics():
 
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'version': 'v3.0'}), 200
+    return jsonify({'status': 'ok', 'version': 'v3.1'}), 200
 
 def cleanup_old_cache():
     """Очищаємо старий кеш"""
@@ -620,9 +647,11 @@ cleanup_thread = threading.Thread(target=cleanup_old_downloads, daemon=True)
 cleanup_thread.start()
 
 if __name__ == '__main__':
-    print(f"🚀 Starting yt-dlp API v3.0 with yt-dlp {yt_dlp.version.__version__}")
+    print(f"🚀 Starting yt-dlp API v3.1 with yt-dlp {yt_dlp.version.__version__}")
     print("✅ Video caching enabled")
     print("✅ Audio extraction enabled")
     print("✅ Quality selection enabled")
     print("✅ Ukrainian subtitles enabled")
+    print("✅ Twitter video pre-check enabled")
+    print("✅ Original format preserved (no re-encoding)")
     app.run(host='0.0.0.0', port=8081, debug=False, threaded=True)
