@@ -54,18 +54,21 @@ bot = telebot.TeleBot(TOKEN)
 
 SUPPORTED_DOMAINS = [
     'tiktok.com', 'vm.tiktok.com',
-    'instagram.com', 
+    'instagram.com',
     'youtube.com', 'youtu.be',
     'twitter.com', 'x.com',
     'facebook.com', 'fb.watch',
     'reddit.com', 'redd.it',
-    'pinterest.com', 'pin.it'
+    'pinterest.com', 'pin.it',
+    'threads.net',  # Threads (Meta)
+    'twitch.tv', 'clips.twitch.tv',  # Twitch clips
 ]
 
 # Rate limiting для груп
 user_last_request = defaultdict(float)
 group_last_request = defaultdict(float)
 user_urls = {}
+user_video_info = {}  # Зберігаємо інформацію про відео для preview
 
 def is_rate_limited(message):
     """Перевіряє rate limiting"""
@@ -97,10 +100,122 @@ def extract_urls_from_message(text):
     urls = [word for word in words if is_supported_url(word)]
     return urls
 
+
+def get_video_info(url):
+    """Отримує інформацію про відео (thumbnail, duration, formats)"""
+    try:
+        response = requests.post(
+            f"{YT_DLP_API_URL}/info",
+            json={"url": url},
+            timeout=15
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.warning(f"Failed to get video info: {e}")
+    return None
+
+
+def format_duration(seconds):
+    """Форматує тривалість в читабельний формат"""
+    if not seconds:
+        return "?"
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def format_size(bytes_size):
+    """Форматує розмір в MB"""
+    if not bytes_size:
+        return "?"
+    mb = bytes_size / (1024 * 1024)
+    return f"{mb:.1f}MB"
+
+
+# ===== INLINE MODE =====
+@bot.inline_handler(func=lambda query: len(query.query) > 10)
+def handle_inline_query(query):
+    """Обробка inline запитів (@bot url)"""
+    try:
+        text = query.query.strip()
+        urls = extract_urls_from_message(text)
+
+        if not urls:
+            # Показуємо підказку
+            result = types.InlineQueryResultArticle(
+                id='help',
+                title="Надішліть посилання на відео",
+                description="YouTube, TikTok, Instagram, Twitter, Threads, Twitch...",
+                input_message_content=types.InputTextMessageContent(
+                    message_text="❌ Посилання не знайдено. Підтримуються: YouTube, TikTok, Instagram, Twitter, Threads, Twitch"
+                )
+            )
+            bot.answer_inline_query(query.id, [result], cache_time=5)
+            return
+
+        url = urls[0]
+
+        # Створюємо варіанти завантаження
+        results = []
+
+        # Auto (рекомендовано)
+        results.append(types.InlineQueryResultArticle(
+            id='auto',
+            title="🎯 Auto (рекомендовано)",
+            description=f"Найкраща якість до 50MB",
+            input_message_content=types.InputTextMessageContent(
+                message_text=f"⏳ Завантажую (auto): {url}"
+            ),
+            reply_markup=types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("⏳ Завантаження...", callback_data="loading")
+            )
+        ))
+
+        # 720p
+        results.append(types.InlineQueryResultArticle(
+            id='720p',
+            title="🎥 720p HD",
+            description="Стандартна якість",
+            input_message_content=types.InputTextMessageContent(
+                message_text=f"⏳ Завантажую (720p): {url}"
+            )
+        ))
+
+        # 1080p
+        results.append(types.InlineQueryResultArticle(
+            id='1080p',
+            title="💎 1080p Full HD",
+            description="Висока якість",
+            input_message_content=types.InputTextMessageContent(
+                message_text=f"⏳ Завантажую (1080p): {url}"
+            )
+        ))
+
+        # Audio
+        results.append(types.InlineQueryResultArticle(
+            id='audio',
+            title="🎵 Тільки аудіо (MP3)",
+            description="Завантажити музику",
+            input_message_content=types.InputTextMessageContent(
+                message_text=f"⏳ Завантажую аудіо: {url}"
+            )
+        ))
+
+        bot.answer_inline_query(query.id, results, cache_time=10)
+
+    except Exception as e:
+        logger.error(f"Inline query error: {e}")
+
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    welcome_text = """
-🎥 *Telegram Video Downloader Bot v3.1*
+    # Отримуємо username бота для inline mode
+    bot_username = bot.get_me().username
+
+    welcome_text = f"""
+🎥 *Telegram Video Downloader Bot v3.2*
 
 Надішліть посилання і оберіть параметри!
 
@@ -112,14 +227,22 @@ def send_welcome(message):
 • Facebook
 • Reddit
 • Pinterest
+• Threads (Meta) 🆕
+• Twitch Clips 🆕
 
 🎛️ *Можливості:*
+• 🎯 Auto-quality (до 50MB)
+• 🖼 Preview з thumbnail
 • 🎵 Audio-only (MP3)
 • 📊 Вибір якості (360p-1080p)
 • 🇺🇦 Українські субтитри
 • ⚡ Smart cache (миттєво!)
 • 👥 Працює в групах!
 • 📐 Збереження оригінального формату
+
+🔗 *Inline режим:*
+`@{bot_username} https://...`
+Працює в будь-якому чаті!
 
 📋 *Обмеження:*
 • Max файл: 50MB
@@ -128,7 +251,7 @@ def send_welcome(message):
 *Команди:*
 /audio - тільки аудіо
 /stats - статистика кешу
-/group_help - довідка для груп
+/group\_help - довідка для груп
 
 Просто надішліть посилання! ⏳
 """
@@ -246,52 +369,121 @@ def handle_message(message):
         download_content(message, url, quality='720p', format='video', show_buttons=False)
         return
     
-    # В ПРИВАТНИХ ЧАТАХ - показуємо inline buttons
+    # В ПРИВАТНИХ ЧАТАХ - отримуємо інфо та показуємо preview
     user_urls[message.from_user.id] = url
-    
+    status_msg = bot.reply_to(message, "🔍 Отримую інформацію про відео...")
+
+    # Отримуємо інформацію про відео
+    video_info = get_video_info(url)
+    user_video_info[message.from_user.id] = video_info
+
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("🎥 720p (рекомендовано)", callback_data="quality_720_video"),
+        types.InlineKeyboardButton("🎯 Auto (рекомендовано)", callback_data="quality_auto_video")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🎥 720p", callback_data="quality_720_video"),
         types.InlineKeyboardButton("💎 1080p", callback_data="quality_1080_video")
     )
     markup.add(
-        types.InlineKeyboardButton("📱 480p (мобільні)", callback_data="quality_480_video"),
-        types.InlineKeyboardButton("⚡ 360p (швидко)", callback_data="quality_360_video")
+        types.InlineKeyboardButton("📱 480p", callback_data="quality_480_video"),
+        types.InlineKeyboardButton("⚡ 360p", callback_data="quality_360_video")
     )
     markup.add(
         types.InlineKeyboardButton("🎵 Аудіо (MP3)", callback_data="quality_audio_audio")
     )
-    
-    bot.reply_to(message, "⚙️ Оберіть формат завантаження:", reply_markup=markup)
+
+    # Формуємо повідомлення з preview
+    if video_info:
+        title = video_info.get('title', 'Відео')[:100]
+        duration = format_duration(video_info.get('duration'))
+        platform = video_info.get('platform', '').capitalize()
+        thumbnail = video_info.get('thumbnail')
+
+        preview_text = f"🎬 *{title}*\n"
+        preview_text += f"⏱ Тривалість: {duration}\n"
+        if platform:
+            preview_text += f"📺 Платформа: {platform}\n"
+        preview_text += "\n⚙️ Оберіть якість:"
+
+        # Якщо є thumbnail - відправляємо фото з кнопками
+        if thumbnail:
+            try:
+                bot.delete_message(message.chat.id, status_msg.message_id)
+                bot.send_photo(
+                    message.chat.id,
+                    thumbnail,
+                    caption=preview_text,
+                    reply_markup=markup,
+                    parse_mode='Markdown',
+                    reply_to_message_id=message.message_id
+                )
+                return
+            except Exception as e:
+                logger.warning(f"Failed to send thumbnail: {e}")
+
+        # Якщо немає thumbnail - просто текст
+        bot.edit_message_text(
+            preview_text,
+            message.chat.id,
+            status_msg.message_id,
+            reply_markup=markup,
+            parse_mode='Markdown'
+        )
+    else:
+        bot.edit_message_text(
+            "⚙️ Оберіть формат завантаження:",
+            message.chat.id,
+            status_msg.message_id,
+            reply_markup=markup
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('quality_'))
 def handle_quality_callback(call):
     """Обробка вибору якості"""
     try:
         parts = call.data.split('_')
-        quality = parts[1] + 'p' if parts[2] == 'video' else parts[1]
-        format = parts[2]
-        
+        quality_raw = parts[1]
+        format_type = parts[2]
+
+        # Обробка auto quality
+        if quality_raw == 'auto':
+            quality = 'auto'
+        elif format_type == 'video':
+            quality = quality_raw + 'p'
+        else:
+            quality = quality_raw
+
         user_id = call.from_user.id
         url = user_urls.get(user_id)
-        
+
         if not url:
             bot.answer_callback_query(call.id, "❌ URL не знайдено. Надішліть заново.")
             return
-        
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-        
+
+        # Видаляємо кнопки або фото з кнопками
+        try:
+            if call.message.photo:
+                bot.delete_message(call.message.chat.id, call.message.message_id)
+            else:
+                bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+
         quality_text = {
             'audio': '🎵 MP3 аудіо',
+            'auto': '🎯 Auto якість',
             '360p': '⚡ 360p відео',
             '480p': '📱 480p відео',
             '720p': '🎥 720p відео',
             '1080p': '💎 1080p відео'
         }.get(quality, quality)
-        
+
         bot.answer_callback_query(call.id, f"✅ Обрано: {quality_text}")
-        download_content(call.message, url, quality, format, show_buttons=True)
-        
+
+        # Для auto - використовуємо спеціальний режим
+        download_content(call.message, url, quality, format_type, show_buttons=True)
+
     except Exception as e:
         logger.error(f"Callback error: {e}")
         bot.answer_callback_query(call.id, "❌ Помилка")
@@ -509,7 +701,7 @@ def send_downloaded_content(message, status_data, status_msg):
         bot.edit_message_text("❌ Помилка відправки", message.chat.id, status_msg.message_id)
 
 if __name__ == '__main__':
-    logger.info("🚀 Starting Telegram Video Bot v3.1 (Groups enabled)...")
+    logger.info("🚀 Starting Telegram Video Bot v3.2 (Inline + Auto-quality)...")
     logger.info(f"API URL: {YT_DLP_API_URL}")
     
     try:

@@ -213,6 +213,7 @@ def check_has_video(url, platform):
 def get_platform_options(platform, download_id, quality='720p', format='video'):
     """Оптимізовані налаштування для кожної платформи - БЕЗ перекодування"""
 
+    # Базові налаштування
     base_opts = {
         'outtmpl': f'/downloads/{download_id}_%(title)s.%(ext)s',
         'ignoreerrors': False,
@@ -222,14 +223,21 @@ def get_platform_options(platform, download_id, quality='720p', format='video'):
         'concurrent_fragment_downloads': 4,
         'buffersize': 1024 * 16,
         'http_chunk_size': 10485760,  # 10MB chunks
+        **get_cookies_opts()  # Cookies якщо є
     }
 
-    height_limit = {
-        '360p': 360,
-        '480p': 480,
-        '720p': 720,
-        '1080p': 1080
-    }.get(quality, 720)
+    # AUTO QUALITY - вибираємо найкращу якість до 50MB
+    if quality == 'auto':
+        # Формат: найкраще відео до 50MB + аудіо, або просто найкраще до 50MB
+        format_str = 'bestvideo[filesize<50M]+bestaudio/best[filesize<50M]/bestvideo[height<=720]+bestaudio/best[height<=720]/best'
+    else:
+        height_limit = {
+            '360p': 360,
+            '480p': 480,
+            '720p': 720,
+            '1080p': 1080
+        }.get(quality, 720)
+        format_str = f'best[height<={height_limit}]/best'
 
     # AUDIO-ONLY режим
     if format == 'audio':
@@ -242,33 +250,48 @@ def get_platform_options(platform, download_id, quality='720p', format='video'):
             }]
         }
 
-    # INSTAGRAM - БЕЗ перекодування, зберігаємо оригінальний формат
+    # INSTAGRAM - з cookies для приватних відео
     if platform == 'instagram':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best',
+            'format': format_str,
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en', 'ru'],
-            # Не перекодуємо - зберігаємо оригінальну якість і пропорції
         }
 
-    # TIKTOK - зберігаємо оригінальний формат
+    # TIKTOK
     elif platform == 'tiktok':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best',
+            'format': format_str,
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
         }
 
-    # TWITTER - зберігаємо оригінальний формат
+    # TWITTER
     elif platform == 'twitter':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best',
+            'format': format_str,
+        }
+
+    # THREADS (Meta) - аналогічно Instagram
+    elif platform == 'threads':
+        return {**base_opts,
+            'format': format_str,
+        }
+
+    # TWITCH clips
+    elif platform == 'twitch':
+        return {**base_opts,
+            'format': format_str,
         }
 
     # REDDIT - може потребувати merge
     elif platform == 'reddit':
+        if quality == 'auto':
+            fmt = 'bestvideo[filesize<50M]+bestaudio/best[filesize<50M]/best'
+        else:
+            fmt = f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best'
         return {**base_opts,
-            'format': f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best',
+            'format': fmt,
             'merge_output_format': 'mp4',
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
@@ -276,8 +299,12 @@ def get_platform_options(platform, download_id, quality='720p', format='video'):
 
     # YOUTUBE - може потребувати merge
     elif platform == 'youtube':
+        if quality == 'auto':
+            fmt = 'bestvideo[filesize<50M]+bestaudio/best[filesize<50M]/bestvideo[height<=720]+bestaudio/best'
+        else:
+            fmt = f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best'
         return {**base_opts,
-            'format': f'bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best',
+            'format': fmt,
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': ['uk', 'en', 'ru'],
@@ -287,19 +314,19 @@ def get_platform_options(platform, download_id, quality='720p', format='video'):
     # PINTEREST
     elif platform == 'pinterest':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best'
+            'format': format_str
         }
 
     # FACEBOOK
     elif platform == 'facebook':
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best',
+            'format': format_str,
         }
 
-    # DEFAULT - зберігаємо оригінальний формат
+    # DEFAULT
     else:
         return {**base_opts,
-            'format': f'best[height<={height_limit}]/best',
+            'format': format_str,
             'writesubtitles': True,
             'subtitleslangs': ['uk', 'en'],
         }
@@ -491,7 +518,7 @@ def detect_platform(url):
     if 'tiktok.com' in url_lower or 'vm.tiktok.com' in url_lower:
         return 'tiktok'
     elif 'instagram.com' in url_lower:
-        return 'instagram' 
+        return 'instagram'
     elif 'youtube.com' in url_lower or 'youtu.be' in url_lower:
         return 'youtube'
     elif 'twitter.com' in url_lower or 'x.com' in url_lower:
@@ -502,14 +529,81 @@ def detect_platform(url):
         return 'reddit'
     elif 'pinterest.com' in url_lower or 'pin.it' in url_lower:
         return 'pinterest'
+    elif 'threads.net' in url_lower:
+        return 'threads'
+    elif 'twitch.tv' in url_lower or 'clips.twitch.tv' in url_lower:
+        return 'twitch'
     else:
         return 'unknown'
+
+
+# Cookies path для Instagram
+COOKIES_PATH = '/downloads/cookies.txt'
+
+
+def get_cookies_opts():
+    """Повертає опції cookies якщо файл існує"""
+    if Path(COOKIES_PATH).exists():
+        return {'cookiefile': COOKIES_PATH}
+    return {}
+
+@app.route('/info', methods=['POST'])
+def get_video_info():
+    """Отримує інформацію про відео без завантаження"""
+    data = request.json
+    url = data.get('url')
+
+    if not url:
+        return jsonify({'error': 'No URL provided'}), 400
+
+    try:
+        platform = detect_platform(url)
+        info_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            **get_cookies_opts()
+        }
+
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+            if info is None:
+                return jsonify({'error': 'Could not extract info'}), 400
+
+            # Збираємо інформацію про формати для auto-quality
+            formats = info.get('formats', [])
+            available_qualities = []
+            for f in formats:
+                height = f.get('height')
+                filesize = f.get('filesize') or f.get('filesize_approx')
+                if height and f.get('vcodec', 'none') != 'none':
+                    available_qualities.append({
+                        'height': height,
+                        'filesize': filesize,
+                        'format_id': f.get('format_id')
+                    })
+
+            return jsonify({
+                'title': info.get('title', 'Video'),
+                'duration': info.get('duration'),
+                'thumbnail': info.get('thumbnail'),
+                'platform': platform,
+                'uploader': info.get('uploader'),
+                'view_count': info.get('view_count'),
+                'available_qualities': sorted(available_qualities, key=lambda x: x['height'], reverse=True)
+            }), 200
+
+    except Exception as e:
+        print(f"Info extraction error: {e}")
+        return jsonify({'error': str(e)[:100]}), 400
+
 
 @app.route('/status/<download_id>', methods=['GET'])
 def get_status(download_id):
     if download_id.startswith('cached_'):
         return jsonify({'status': 'completed', 'cached': True}), 200
-    
+
     if download_id in downloads:
         return jsonify(downloads[download_id]), 200
     else:
@@ -549,27 +643,32 @@ def cache_stats():
 
 @app.route('/health', methods=['GET'])
 def health_check():
+    cookies_available = Path(COOKIES_PATH).exists()
     return jsonify({
         'status': 'ok',
-        'version': 'v3.1',
+        'version': 'v3.2',
         'yt_dlp_version': yt_dlp.version.__version__,
         'system': {
             'active_downloads': download_manager.active_count,
             'max_concurrent': download_manager.max_concurrent,
             'queue_size': download_queue.qsize(),
             'max_queue_size': download_queue.maxsize,
-            'total_downloads': len(downloads)
+            'total_downloads': len(downloads),
+            'cookies_available': cookies_available
         },
         'features': [
             'Video caching (no re-downloads)',
             'Audio extraction (MP3)',
+            'Auto-quality selection (best under 50MB)',
             'Quality selection (360p-1080p)',
+            'Video info & thumbnail preview',
             'Ukrainian subtitles',
             'Original format preserved',
             'Twitter video pre-check',
-            '7 platforms support'
+            'Instagram cookies support',
+            '9 platforms support'
         ],
-        'supported_platforms': ['YouTube', 'Instagram', 'Twitter/X', 'Facebook', 'TikTok', 'Reddit', 'Pinterest']
+        'supported_platforms': ['YouTube', 'Instagram', 'Twitter/X', 'Facebook', 'TikTok', 'Reddit', 'Pinterest', 'Threads', 'Twitch']
     }), 200
 
 @app.route('/metrics', methods=['GET'])
@@ -594,7 +693,7 @@ def metrics():
 
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'version': 'v3.1'}), 200
+    return jsonify({'status': 'ok', 'version': 'v3.2'}), 200
 
 def cleanup_old_cache():
     """Очищаємо старий кеш"""
@@ -647,11 +746,14 @@ cleanup_thread = threading.Thread(target=cleanup_old_downloads, daemon=True)
 cleanup_thread.start()
 
 if __name__ == '__main__':
-    print(f"🚀 Starting yt-dlp API v3.1 with yt-dlp {yt_dlp.version.__version__}")
+    print(f"🚀 Starting yt-dlp API v3.2 with yt-dlp {yt_dlp.version.__version__}")
     print("✅ Video caching enabled")
     print("✅ Audio extraction enabled")
-    print("✅ Quality selection enabled")
+    print("✅ Auto-quality selection enabled")
+    print("✅ Video info & thumbnail preview enabled")
     print("✅ Ukrainian subtitles enabled")
     print("✅ Twitter video pre-check enabled")
     print("✅ Original format preserved (no re-encoding)")
+    print(f"✅ Instagram cookies: {'available' if Path(COOKIES_PATH).exists() else 'not configured'}")
+    print("✅ Platforms: YouTube, Instagram, Twitter/X, Facebook, TikTok, Reddit, Pinterest, Threads, Twitch")
     app.run(host='0.0.0.0', port=8081, debug=False, threaded=True)

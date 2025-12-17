@@ -1,19 +1,22 @@
-# 🎥 Telegram Video Downloader Bot v3.0
+# 🎥 Telegram Video Downloader Bot v3.2
 
-Production-ready Telegram bot для завантаження відео з YouTube, TikTok, Instagram та інших платформ.
+Production-ready Telegram bot для завантаження відео з YouTube, TikTok, Instagram, Threads, Twitch та інших платформ.
 
 ## ✨ Features
 
+- 🎯 **Auto-quality** - автоматично вибирає найкращу якість до 50MB
+- 🖼 **Thumbnail preview** - показує прев'ю відео перед завантаженням
+- 🔗 **Inline mode** - `@bot_username URL` працює в будь-якому чаті
 - 🎵 Audio extraction (MP3)
 - 📊 Quality selection (360p-1080p)
 - 🇺🇦 Ukrainian subtitles
 - ⚡ Smart cache (миттєві повторні завантаження)
 - 👥 Group support (auto-download без тегів)
-- 📱 Mobile-friendly encoding
+- 🍪 Instagram cookies support (приватні відео)
 - 📊 Prometheus metrics
 - 🛡️ Rate limiting (30s/user, 10s/group)
 
-## 🌐 Supported Platforms
+## 🌐 Supported Platforms (9)
 
 - YouTube / YouTube Shorts
 - TikTok
@@ -22,66 +25,99 @@ Production-ready Telegram bot для завантаження відео з YouT
 - Facebook
 - Reddit
 - Pinterest
+- **Threads** (Meta) 🆕
+- **Twitch Clips** 🆕
 
 ## 🚀 Quick Start
 
-1. Clone repository
+```bash
+# 1. Clone repository
 git clone https://github.com/YOUR_USERNAME/telegram-video-bot.git
 cd telegram-video-bot
 
-2. Configure
+# 2. Configure
 cp .env.example .env
-nano .env # Add your TELEGRAM_BOT_TOKEN
+nano .env  # Add your TELEGRAM_BOT_TOKEN
 
-3. Deploy
+# 3. Deploy
 docker compose up -d
 
-4. Check logs
+# 4. Check logs
 docker compose logs -f
+```
 
-text
+## 🔗 Inline Mode
+
+Використовуйте бота в будь-якому чаті:
+
+```
+@your_bot_username https://www.youtube.com/watch?v=...
+```
+
+Оберіть якість з меню:
+- 🎯 Auto (рекомендовано) - найкраща якість до 50MB
+- 🎥 720p HD
+- 💎 1080p Full HD
+- 🎵 Audio only (MP3)
+
+## 🍪 Instagram Cookies (Optional)
+
+Для завантаження приватних Instagram відео:
+
+1. Експортуйте cookies з браузера (розширення "Get cookies.txt")
+2. Збережіть як `downloads/cookies.txt`
+3. Перезапустіть контейнери
+
+```bash
+docker compose restart
+```
 
 ## 📊 Performance
 
-- Response time: 5-10s (first download)
-- Cache hit: ~1s ⚡
-- Max concurrent: 2 downloads
-- Platforms: 7
-- Cache efficiency: 85%+
+| Метрика | Значення |
+|---------|----------|
+| Response time | 5-10s (first download) |
+| Cache hit | ~1s ⚡ |
+| Max concurrent | 2 downloads |
+| Platforms | 9 |
+| Cache efficiency | 85%+ |
 
 ## 🔧 Architecture
 
-┌──────────────┐
-│ Telegram Bot │
-└──────┬───────┘
-│
-┌──────▼───────┐ ┌──────────┐
-│ yt-dlp API │────►│ Redis │
-└──────┬───────┘ │ Cache │
-│ └──────────┘
-┌──────▼───────┐
-│ SQLite │
-│ Database │
-└──────────────┘
-
-text
+```
+┌──────────────────┐
+│   Telegram Bot   │
+│   (Inline mode)  │
+└────────┬─────────┘
+         │
+┌────────▼─────────┐     ┌──────────┐
+│   yt-dlp API     │────►│  SQLite  │
+│  (Auto-quality)  │     │  Cache   │
+└────────┬─────────┘     └──────────┘
+         │
+┌────────▼─────────┐
+│    Downloads     │
+│    /downloads    │
+└──────────────────┘
+```
 
 ## 📝 Configuration
 
 ### Environment Variables
 
+```env
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 YT_DLP_API_URL=http://yt-dlp-api:8081
 MAX_FILE_SIZE=50000000
+```
 
-text
+### Docker Compose Services
 
-### Docker Compose
-
-Services:
-- `telegram-bot` - Telegram bot handler
-- `yt-dlp-api` - Video download API
-- `cleanup-service` - Auto cleanup old files
+| Service | Description |
+|---------|-------------|
+| `telegram-bot` | Telegram bot handler |
+| `yt-dlp-api` | Video download API |
+| `cleanup-service` | Auto cleanup old files |
 
 ## 📊 Monitoring
 
@@ -97,10 +133,12 @@ Available metrics:
 
 ## 🎯 Commands
 
-- `/start` - Bot welcome message
-- `/audio [URL]` - Download audio only (MP3)
-- `/stats` - Cache statistics
-- `/group_help` - Help for group usage
+| Command | Description |
+|---------|-------------|
+| `/start` | Bot welcome message |
+| `/audio [URL]` | Download audio only (MP3) |
+| `/stats` | Cache statistics |
+| `/group_help` | Help for group usage |
 
 ## 👥 Group Usage
 
@@ -114,21 +152,36 @@ Available metrics:
 - 4GB+ RAM
 - 10GB+ storage
 
-## 🔄 Versions
+## 🔄 Changelog
 
-- **v3.0** (current) - Smart cache, groups, metrics
-- **v2.0** - Audio extraction, quality selection
-- **v1.0** - Basic video download
+### v3.2 (current)
+- ✨ Inline mode - use bot in any chat
+- 🎯 Auto-quality selection (best under 50MB)
+- 🖼 Thumbnail preview before download
+- 🆕 Threads (Meta) support
+- 🆕 Twitch Clips support
+- 🍪 Instagram cookies support
+
+### v3.1
+- 🔧 Fixed Story chat error (pyTelegramBotAPI update)
+- 🐦 Twitter video pre-check
+- 📐 Original format preserved (no re-encoding)
+
+### v3.0
+- Smart cache, groups, metrics
+
+### v2.0
+- Audio extraction, quality selection
+
+### v1.0
+- Basic video download
 
 ## 📄 License
 
 MIT License - see LICENSE file
 
-## 👤 Author
-
-Your Name (@your_telegram)
-
 ## 🙏 Acknowledgments
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - [pyTelegramBotAPI](https://github.com/eternnoir/pyTelegramBotAPI)
+- [gallery-dl](https://github.com/mikf/gallery-dl)
