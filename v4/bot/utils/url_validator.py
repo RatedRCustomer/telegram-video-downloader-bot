@@ -15,7 +15,8 @@ SUPPORTED_DOMAINS = {
     'facebook': ['facebook.com', 'fb.watch', 'fb.com'],
     'reddit': ['reddit.com', 'v.redd.it', 'redd.it'],
     'threads': ['threads.net'],
-    'twitch': ['twitch.tv'],
+    'twitch': ['twitch.tv', 'clips.twitch.tv'],
+    'pinterest': ['pinterest.com', 'pin.it'],
 }
 
 # URL patterns for each platform
@@ -38,8 +39,10 @@ URL_PATTERNS = {
     ],
     'facebook': [
         r'facebook\.com/[\w.]+/videos/\d+',
+        r'facebook\.com/[\w.]+/posts/\d+',
         r'facebook\.com/watch\?v=\d+',
         r'facebook\.com/reel/\d+',
+        r'facebook\.com/photo',
         r'fb\.watch/[\w]+',
     ],
     'reddit': [
@@ -54,12 +57,17 @@ URL_PATTERNS = {
         r'twitch\.tv/[\w]+/clip/[\w-]+',
         r'clips\.twitch\.tv/[\w-]+',
     ],
+    'pinterest': [
+        r'pinterest\.com/pin/\d+',
+        r'pin\.it/[\w]+',
+    ],
 }
 
 
-def is_valid_video_url(url: str) -> bool:
+def is_valid_url(url: str) -> bool:
     """
-    Check if the URL is a valid video URL from a supported platform.
+    Check if the URL is a valid media URL from a supported platform.
+    Supports both video and photo posts.
     """
     if not url:
         return False
@@ -85,8 +93,19 @@ def is_valid_video_url(url: str) -> bool:
             for pattern in URL_PATTERNS.get(platform, []):
                 if re.search(pattern, url, re.IGNORECASE):
                     return True
+            # Also allow general platform URLs (for photos without specific patterns)
+            if platform in ['instagram', 'twitter', 'threads', 'facebook', 'pinterest']:
+                return True
 
     return False
+
+
+def is_valid_video_url(url: str) -> bool:
+    """
+    Check if the URL is a valid video URL from a supported platform.
+    (Legacy function, now uses is_valid_url)
+    """
+    return is_valid_url(url)
 
 
 def detect_platform(url: str) -> str:
@@ -123,6 +142,7 @@ def extract_video_id(url: str, platform: str) -> Optional[str]:
         'twitter': r'status/(\d+)',
         'reddit': r'comments/([a-zA-Z0-9]+)',
         'twitch': r'clip/([a-zA-Z0-9_-]+)',
+        'pinterest': r'pin/(\d+)',
     }
 
     pattern = patterns.get(platform)

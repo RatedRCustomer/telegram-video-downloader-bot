@@ -1,4 +1,4 @@
-version: '3.8'
+# Telegram Video Bot v4.0
 
 services:
   # ===== INFRASTRUCTURE =====
@@ -71,8 +71,8 @@ services:
   # ===== APPLICATION =====
   bot:
     build:
-      context: ./v4/bot
-      dockerfile: Dockerfile
+      context: ./v4
+      dockerfile: bot/Dockerfile
     container_name: tg-bot
     restart: unless-stopped
     environment:
@@ -106,8 +106,8 @@ services:
   # ===== CELERY WORKERS =====
   worker-download:
     build:
-      context: ./v4/worker
-      dockerfile: Dockerfile
+      context: ./v4
+      dockerfile: worker/Dockerfile
     container_name: tg-worker-download
     restart: unless-stopped
     command: celery -A tasks worker -Q downloads -c 2 -n download@%h --loglevel=info
@@ -136,8 +136,8 @@ services:
 
   worker-upload:
     build:
-      context: ./v4/worker
-      dockerfile: Dockerfile
+      context: ./v4
+      dockerfile: worker/Dockerfile
     container_name: tg-worker-upload
     restart: unless-stopped
     command: celery -A tasks worker -Q uploads -c 3 -n upload@%h --loglevel=info
