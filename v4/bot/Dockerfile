@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy shared modules
 COPY shared /app/shared
 
+# Copy migrations
+COPY migrations /app/migrations
+
 # Copy bot code
 COPY bot /app/bot
 
