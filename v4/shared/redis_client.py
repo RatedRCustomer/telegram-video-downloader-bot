@@ -86,16 +86,20 @@ class RedisClient:
         await self._redis.expire(f"progress:{download_id}", 3600)
 
     async def get_progress(self, download_id: str) -> Optional[dict]:
-        """Get download progress"""
+        """Get download progress and all extra data"""
         if not self._redis:
             return None
         data = await self._redis.hgetall(f"progress:{download_id}")
         if data:
-            return {
-                'progress': float(data.get('progress', 0)),
-                'status': data.get('status', 'unknown'),
-                'error': data.get('error')
-            }
+            # Return all fields from Redis hash
+            result = dict(data)
+            # Ensure progress is float
+            if 'progress' in result:
+                try:
+                    result['progress'] = float(result['progress'])
+                except:
+                    result['progress'] = 0
+            return result
         return None
 
     # ===== PUB/SUB FOR REAL-TIME UPDATES =====
