@@ -294,7 +294,16 @@ def download_video(self, download_id: str, url: str, platform: str, quality: str
         except:
             pass
 
-        update_progress(download_id, 100, 'completed')
+        update_progress(download_id, 100, 'completed', {
+            'file_key': object_key,
+            'file_size': file_size,
+            'title': title,
+            'description': description,
+            'thumbnail': info.get('thumbnail'),
+            'duration': info.get('duration'),
+            'width': info.get('width'),
+            'height': info.get('height'),
+        })
 
         return {
             'status': 'completed',
@@ -449,7 +458,13 @@ def download_media(self, download_id: str, url: str, platform: str):
             update_progress(download_id, 0, 'error')
             return {'error': 'Медіа не знайдено', 'status': 'error'}
 
-        update_progress(download_id, 100, 'completed')
+        update_progress(download_id, 100, 'completed', {
+            'media': media_files,
+            'title': title,
+            'description': description,
+            'uploader': uploader,
+            'is_carousel': len(media_files) > 1,
+        })
 
         return {
             'status': 'completed',

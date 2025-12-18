@@ -4,17 +4,35 @@ Callback query handlers for quality selection, media downloads, and progress
 
 import logging
 import asyncio
+import os
+import json
+import tempfile
 from uuid import uuid4
 from typing import Any
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InputMediaPhoto
+from aiogram.types import CallbackQuery, InputMediaPhoto, FSInputFile, BufferedInputFile
 from aiogram.exceptions import TelegramBadRequest
 
 from celery import Celery
+from minio import Minio
 
 router = Router(name="callbacks")
 logger = logging.getLogger(__name__)
+
+
+def get_minio_client(config):
+    """Get MinIO client"""
+    endpoint = config.minio_endpoint if config else 'minio:9000'
+    access_key = config.minio_access_key if config else 'minioadmin'
+    secret_key = config.minio_secret_key if config else 'minioadmin123'
+
+    return Minio(
+        endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=False
+    )
 
 
 @router.callback_query(F.data.startswith("quality:"))
@@ -348,7 +366,7 @@ async def monitor_download_progress(
     include_caption: bool = False,
     description: str = ""
 ):
-    """Monitor download progress and update message"""
+    """Monitor download progress and send file when completed"""
     last_progress = 0
     max_wait = 300  # 5 minutes timeout
     wait_time = 0
@@ -376,16 +394,22 @@ async def monitor_download_progress(
         progress = float(progress_data.get("progress", 0))
 
         if status == "completed":
-            # Download completed
+            # Download completed - now send file to Telegram
             try:
                 await bot.edit_message_text(
-                    f"✅ <b>Завантаження завершено!</b>\n\n"
+                    f"📤 <b>Відправка в Telegram...</b>\n\n"
                     f"{icon} {title}",
                     chat_id=chat_id,
                     message_id=message_id
                 )
             except:
                 pass
+
+            # Get file from MinIO and send
+            await send_file_to_telegram(
+                bot, config, chat_id, message_id,
+                progress_data, media_type, include_caption, description
+            )
             return
 
         if status == "error":
@@ -429,6 +453,149 @@ async def monitor_download_progress(
         )
     except TelegramBadRequest:
         pass
+
+
+async def send_file_to_telegram(
+    bot, config, chat_id: int, message_id: int,
+    progress_data: dict, media_type: str,
+    include_caption: bool, description: str
+):
+    """Download file from MinIO and send to Telegram"""
+    try:
+        minio = get_minio_client(config)
+        bucket = config.minio_bucket if config else 'videos'
+
+        # Get file info from progress data
+        file_key = progress_data.get("file_key")
+        title = progress_data.get("title", "Медіа")
+        file_description = progress_data.get("description", description)
+
+        # Build caption
+        caption = f"<b>{title}</b>"
+        if include_caption and file_description:
+            caption += f"\n\n<blockquote>{file_description[:900]}</blockquote>"
+
+        if file_key:
+            # Single file (video/audio)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file_key)[1]) as tmp:
+                tmp_path = tmp.name
+                minio.fget_object(bucket, file_key, tmp_path)
+
+            try:
+                file_size = os.path.getsize(tmp_path)
+                input_file = FSInputFile(tmp_path, filename=f"{title[:50]}{os.path.splitext(file_key)[1]}")
+
+                if media_type == "audio":
+                    await bot.send_audio(
+                        chat_id=chat_id,
+                        audio=input_file,
+                        caption=caption,
+                        title=title[:64],
+                    )
+                else:
+                    duration = progress_data.get("duration")
+                    width = progress_data.get("width")
+                    height = progress_data.get("height")
+
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=input_file,
+                        caption=caption,
+                        duration=int(duration) if duration else None,
+                        width=int(width) if width else None,
+                        height=int(height) if height else None,
+                        supports_streaming=True,
+                    )
+
+                # Delete status message
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=message_id)
+                except:
+                    pass
+
+            finally:
+                # Cleanup temp file
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+
+        else:
+            # Media carousel (multiple files)
+            media_files = progress_data.get("media")
+            if media_files:
+                try:
+                    media_files = json.loads(media_files) if isinstance(media_files, str) else media_files
+                except:
+                    media_files = []
+
+            if media_files:
+                await send_media_group(bot, minio, bucket, chat_id, message_id, media_files, caption)
+
+    except Exception as e:
+        logger.error(f"Error sending file to Telegram: {e}")
+        try:
+            await bot.edit_message_text(
+                f"❌ <b>Помилка відправки</b>\n\n"
+                f"💬 {str(e)[:200]}",
+                chat_id=chat_id,
+                message_id=message_id
+            )
+        except:
+            pass
+
+
+async def send_media_group(bot, minio, bucket: str, chat_id: int, message_id: int, media_files: list, caption: str):
+    """Send media group (carousel) to Telegram"""
+    from aiogram.types import InputMediaPhoto, InputMediaVideo
+
+    media_group = []
+    tmp_files = []
+
+    try:
+        for idx, media in enumerate(media_files[:10]):  # Telegram limit is 10
+            file_key = media.get("file_key")
+            if not file_key:
+                continue
+
+            ext = os.path.splitext(file_key)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp_path = tmp.name
+                tmp_files.append(tmp_path)
+                minio.fget_object(bucket, file_key, tmp_path)
+
+            input_file = FSInputFile(tmp_path)
+
+            # First item gets caption
+            item_caption = caption if idx == 0 else None
+
+            if media.get("type") == "video":
+                media_group.append(InputMediaVideo(
+                    media=input_file,
+                    caption=item_caption,
+                ))
+            else:
+                media_group.append(InputMediaPhoto(
+                    media=input_file,
+                    caption=item_caption,
+                ))
+
+        if media_group:
+            await bot.send_media_group(chat_id=chat_id, media=media_group)
+
+            # Delete status message
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            except:
+                pass
+
+    finally:
+        # Cleanup temp files
+        for tmp_path in tmp_files:
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
 
 def create_progress_bar(progress: int, length: int = 10) -> str:
