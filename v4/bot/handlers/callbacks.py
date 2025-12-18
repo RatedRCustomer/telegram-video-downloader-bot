@@ -5,6 +5,7 @@ Callback query handlers for quality selection, media downloads, and progress
 import logging
 import asyncio
 from uuid import uuid4
+from typing import Any
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InputMediaPhoto
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.callback_query(F.data.startswith("quality:"))
-async def handle_quality_selection(callback: CallbackQuery):
+async def handle_quality_selection(callback: CallbackQuery, config: Any = None, redis: Any = None):
     """Handle quality selection callback for video downloads"""
     await callback.answer()
 
@@ -29,9 +30,6 @@ async def handle_quality_selection(callback: CallbackQuery):
 
     quality = parts[1]
     msg_id = parts[2]
-
-    redis = callback.bot.get("redis")
-    config = callback.bot.get("config")
 
     # Get pending URL data
     cache_key = f"pending_url:{callback.from_user.id}:{msg_id}"
@@ -52,7 +50,7 @@ async def handle_quality_selection(callback: CallbackQuery):
     media_info = url_data.get("info", {})
 
     # Update message to show downloading
-    title = media_info.get("title", "Завантаження")[:50]
+    title = media_info.get("title", "Завантаження")[:50] if media_info else "Завантаження"
     await update_message(
         callback.message,
         f"⬇️ <b>Завантаження...</b>\n\n"
@@ -107,7 +105,7 @@ async def handle_quality_selection(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("audio:"))
-async def handle_audio_download(callback: CallbackQuery):
+async def handle_audio_download(callback: CallbackQuery, config: Any = None, redis: Any = None):
     """Handle audio-only download for YouTube"""
     await callback.answer()
 
@@ -117,9 +115,6 @@ async def handle_audio_download(callback: CallbackQuery):
         return
 
     msg_id = parts[1]
-
-    redis = callback.bot.get("redis")
-    config = callback.bot.get("config")
 
     # Get pending URL data
     cache_key = f"pending_url:{callback.from_user.id}:{msg_id}"
@@ -138,7 +133,7 @@ async def handle_audio_download(callback: CallbackQuery):
     url = url_data["url"]
     platform = url_data["platform"]
     media_info = url_data.get("info", {})
-    title = media_info.get("title", "Завантаження")[:50]
+    title = media_info.get("title", "Завантаження")[:50] if media_info else "Завантаження"
 
     # Update message
     await update_message(
@@ -191,7 +186,7 @@ async def handle_audio_download(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("media:"))
-async def handle_media_download(callback: CallbackQuery):
+async def handle_media_download(callback: CallbackQuery, config: Any = None, redis: Any = None):
     """Handle photo/media download callbacks"""
     await callback.answer()
 
@@ -203,9 +198,6 @@ async def handle_media_download(callback: CallbackQuery):
 
     action = parts[1]  # all, photo, caption
     msg_id = parts[2]
-
-    redis = callback.bot.get("redis")
-    config = callback.bot.get("config")
 
     # Get pending URL data
     cache_key = f"pending_url:{callback.from_user.id}:{msg_id}"
@@ -226,8 +218,8 @@ async def handle_media_download(callback: CallbackQuery):
     media_info = url_data.get("info", {})
     is_carousel = url_data.get("is_carousel", False)
 
-    title = media_info.get("title", "Пост")[:50]
-    description = media_info.get("description", "")
+    title = media_info.get("title", "Пост")[:50] if media_info else "Пост"
+    description = media_info.get("description", "") if media_info else ""
     include_caption = action == "caption"
 
     # Update message
@@ -295,7 +287,7 @@ async def handle_media_download(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "cancel")
-async def handle_cancel(callback: CallbackQuery):
+async def handle_cancel(callback: CallbackQuery, **kwargs):
     """Handle cancel button"""
     await callback.answer("❌ Скасовано")
     try:
@@ -305,7 +297,7 @@ async def handle_cancel(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("settings:"))
-async def handle_settings(callback: CallbackQuery):
+async def handle_settings(callback: CallbackQuery, **kwargs):
     """Handle settings callbacks"""
     await callback.answer()
 
@@ -384,30 +376,16 @@ async def monitor_download_progress(
         progress = float(progress_data.get("progress", 0))
 
         if status == "completed":
-            # Get download info to retrieve files
-            download_info = await redis.get_cached(f"download:{download_id}")
-
-            # Get result from Celery
-            celery_app = get_celery_app(config)
-            result = celery_app.AsyncResult(download_id)
-
+            # Download completed
             try:
-                # Try to get result if available
-                task_result = result.get(timeout=5)
+                await bot.edit_message_text(
+                    f"✅ <b>Завантаження завершено!</b>\n\n"
+                    f"{icon} {title}",
+                    chat_id=chat_id,
+                    message_id=message_id
+                )
             except:
-                task_result = None
-
-            # Send files to user
-            await send_completed_media(
-                bot,
-                chat_id,
-                message_id,
-                download_info,
-                task_result,
-                media_type,
-                include_caption,
-                description
-            )
+                pass
             return
 
         if status == "error":
@@ -451,97 +429,6 @@ async def monitor_download_progress(
         )
     except TelegramBadRequest:
         pass
-
-
-async def send_completed_media(
-    bot,
-    chat_id: int,
-    message_id: int,
-    download_info: dict,
-    task_result: dict,
-    media_type: str,
-    include_caption: bool,
-    description: str
-):
-    """Send completed media to user"""
-    if not task_result or task_result.get('status') == 'error':
-        error_msg = task_result.get('error', 'Невідома помилка') if task_result else 'Невідома помилка'
-        try:
-            await bot.edit_message_text(
-                f"❌ <b>Помилка</b>\n\n{error_msg}",
-                chat_id=chat_id,
-                message_id=message_id
-            )
-        except:
-            pass
-        return
-
-    # Build caption with blockquote if requested
-    caption = ""
-    if include_caption and description:
-        # Use HTML blockquote for caption
-        caption = f"<blockquote>{description[:900]}</blockquote>"
-
-        if task_result.get('uploader'):
-            caption += f"\n\n👤 {task_result['uploader']}"
-
-    # Delete progress message
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except:
-        pass
-
-    # Send media based on type
-    if media_type == "media" and task_result.get('media'):
-        # Send photos/media
-        media_files = task_result['media']
-
-        if len(media_files) == 1:
-            # Single file
-            file_info = media_files[0]
-            if file_info['type'] == 'photo':
-                # For now, send the file key info (actual file sending requires MinIO integration)
-                await bot.send_message(
-                    chat_id,
-                    f"✅ <b>Фото завантажено</b>\n\n"
-                    f"📁 Файл: {file_info.get('file_key', 'N/A')}\n"
-                    f"📊 Розмір: {format_size(file_info.get('file_size', 0))}"
-                    + (f"\n\n{caption}" if caption else "")
-                )
-            else:
-                await bot.send_message(
-                    chat_id,
-                    f"✅ <b>Відео завантажено</b>\n\n"
-                    f"📁 Файл: {file_info.get('file_key', 'N/A')}\n"
-                    f"📊 Розмір: {format_size(file_info.get('file_size', 0))}"
-                    + (f"\n\n{caption}" if caption else "")
-                )
-        else:
-            # Multiple files (carousel)
-            files_text = "\n".join([
-                f"  • {f.get('type', 'file')}: {format_size(f.get('file_size', 0))}"
-                for f in media_files
-            ])
-            await bot.send_message(
-                chat_id,
-                f"✅ <b>Карусель завантажено</b>\n\n"
-                f"📁 Файли ({len(media_files)}):\n{files_text}"
-                + (f"\n\n{caption}" if caption else "")
-            )
-    else:
-        # Video or audio
-        file_key = task_result.get('file_key', '')
-        file_size = task_result.get('file_size', 0)
-        title = task_result.get('title', 'Медіа')
-
-        await bot.send_message(
-            chat_id,
-            f"✅ <b>{'Аудіо' if media_type == 'audio' else 'Відео'} завантажено</b>\n\n"
-            f"📹 {title}\n"
-            f"📁 Файл: {file_key}\n"
-            f"📊 Розмір: {format_size(file_size)}"
-            + (f"\n\n{caption}" if caption else "")
-        )
 
 
 def create_progress_bar(progress: int, length: int = 10) -> str:
