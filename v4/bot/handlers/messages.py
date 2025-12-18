@@ -1,5 +1,6 @@
 """
 Message handlers for URL processing
+Supports videos, photos, carousels with captions
 """
 
 import logging
@@ -10,30 +11,31 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.exceptions import TelegramBadRequest
 
-from keyboards.quality import get_quality_keyboard
-from utils.url_validator import is_valid_video_url, detect_platform
+from keyboards.quality import get_quality_keyboard, get_media_keyboard
+from utils.url_validator import is_valid_url, detect_platform
 
 router = Router(name="messages")
 logger = logging.getLogger(__name__)
 
-# URL pattern
+# URL pattern - extended to support more platforms and post types
 URL_PATTERN = re.compile(
     r'https?://(?:www\.)?'
     r'(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/|'
-    r'instagram\.com/(?:p/|reel/|stories/)|'
+    r'instagram\.com/(?:p/|reel/|reels/|stories/|tv/)|'
     r'tiktok\.com/|vm\.tiktok\.com/|'
     r'twitter\.com/|x\.com/|'
     r'facebook\.com/|fb\.watch/|'
     r'reddit\.com/|v\.redd\.it/|'
     r'threads\.net/|'
-    r'twitch\.tv/\w+/clip/)'
+    r'twitch\.tv/\w+/clip/|clips\.twitch\.tv/|'
+    r'pinterest\.com/pin/|pin\.it/)'
     r'[^\s<>"\']+'
 )
 
 
 @router.message(F.text.regexp(URL_PATTERN))
-async def handle_video_url(message: Message):
-    """Handle messages containing video URLs"""
+async def handle_media_url(message: Message):
+    """Handle messages containing media URLs (videos, photos, carousels)"""
     # Extract URL from message
     match = URL_PATTERN.search(message.text)
     if not match:
@@ -43,7 +45,7 @@ async def handle_video_url(message: Message):
     logger.info(f"Processing URL: {url} from user {message.from_user.id}")
 
     # Validate URL
-    if not is_valid_video_url(url):
+    if not is_valid_url(url):
         await message.reply("❌ Невірне або непідтримуване посилання")
         return
 
@@ -55,114 +57,158 @@ async def handle_video_url(message: Message):
     processing_msg = await message.reply(
         f"{platform_emoji} <b>Обробка посилання...</b>\n"
         f"Платформа: {platform.title()}\n\n"
-        f"⏳ Отримання інформації про відео..."
+        f"⏳ Отримання інформації..."
     )
 
-    # Get video info from cache or API
+    # Get media info from Celery task
     redis = message.bot.get("redis")
     config = message.bot.get("config")
 
     # Try to get from cache
-    cache_key = f"video_info:{url}"
-    video_info = None
+    cache_key = f"media_info:{url}"
+    media_info = None
 
     if redis:
-        video_info = await redis.get_cached(cache_key)
+        media_info = await redis.get_cached(cache_key)
 
-    if not video_info:
-        # Fetch video info from yt-dlp service
-        import aiohttp
+    if not media_info:
+        # Send task to get media info
+        from celery import Celery
+        celery_app = Celery(
+            'tasks',
+            broker=config.celery_broker_url if config else 'redis://redis:6379/0',
+            backend=config.celery_result_backend if config else 'redis://redis:6379/0'
+        )
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{config.ytdlp_service_url}/info",
-                    json={"url": url},
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        video_info = await resp.json()
-                        # Cache for 1 hour
-                        if redis:
-                            await redis.set_cached(cache_key, video_info, ttl=3600)
-                    else:
-                        error_data = await resp.json()
-                        await processing_msg.edit_text(
-                            f"❌ <b>Помилка отримання інформації</b>\n\n"
-                            f"{error_data.get('error', 'Невідома помилка')}"
-                        )
-                        return
+            # Call the get_media_info task synchronously (with timeout)
+            result = celery_app.send_task(
+                'tasks.get_media_info',
+                args=[url, platform],
+                queue='downloads'
+            )
+            media_info = result.get(timeout=30)
+
+            if media_info and not media_info.get('error'):
+                # Cache for 1 hour
+                if redis:
+                    await redis.set_cached(cache_key, media_info, ttl=3600)
         except Exception as e:
-            logger.error(f"Error fetching video info: {e}")
+            logger.error(f"Error fetching media info: {e}")
             await processing_msg.edit_text(
-                f"❌ <b>Помилка з'єднання</b>\n\n"
-                f"Не вдалося отримати інформацію про відео.\n"
+                f"❌ <b>Помилка отримання інформації</b>\n\n"
                 f"Спробуйте пізніше."
             )
             return
 
-    # Check if video exists
-    if not video_info.get("has_video", True):
+    if media_info and media_info.get('error'):
         await processing_msg.edit_text(
-            f"❌ <b>Відео не знайдено</b>\n\n"
-            f"Це посилання не містить відео або воно недоступне."
+            f"❌ <b>Помилка</b>\n\n"
+            f"{media_info.get('error', 'Невідома помилка')}"
         )
         return
 
-    # Format video info
-    title = video_info.get("title", "Без назви")[:100]
-    duration = video_info.get("duration", 0)
-    duration_str = format_duration(duration)
-    thumbnail = video_info.get("thumbnail")
+    # Determine content type
+    has_video = media_info.get('has_video', False)
+    has_photo = media_info.get('has_photo', False)
+    is_carousel = media_info.get('is_carousel', False)
+    media_count = media_info.get('media_count', 1)
+
+    # Format info message
+    title = media_info.get('title', '')[:100]
+    description = media_info.get('description', '')[:300]
+    uploader = media_info.get('uploader', '')
+    thumbnail = media_info.get('thumbnail')
 
     # Build info message
-    info_text = (
-        f"{platform_emoji} <b>{title}</b>\n\n"
-        f"⏱ Тривалість: {duration_str}\n"
-    )
+    if has_video:
+        media_type = "🎬 Відео"
+        duration = media_info.get('media', [{}])[0].get('duration', 0) if media_info.get('media') else 0
+        duration_str = format_duration(duration)
+    elif has_photo:
+        if is_carousel:
+            media_type = f"🖼 Карусель ({media_count} фото)"
+        else:
+            media_type = "🖼 Фото"
+        duration_str = None
+    else:
+        media_type = "📎 Медіа"
+        duration_str = None
 
-    if video_info.get("view_count"):
-        info_text += f"👁 Перегляди: {format_number(video_info['view_count'])}\n"
+    info_text = f"{platform_emoji} <b>{title or 'Пост'}</b>\n\n"
+    info_text += f"📌 Тип: {media_type}\n"
 
-    if video_info.get("uploader"):
-        info_text += f"👤 Автор: {video_info['uploader']}\n"
+    if duration_str:
+        info_text += f"⏱ Тривалість: {duration_str}\n"
 
-    info_text += "\n<b>Виберіть якість:</b>"
+    if uploader:
+        info_text += f"👤 Автор: {uploader}\n"
 
-    # Store URL for callback
+    # Add description preview
+    if description:
+        # Truncate description for preview
+        desc_preview = description[:150]
+        if len(description) > 150:
+            desc_preview += "..."
+        info_text += f"\n<i>{desc_preview}</i>\n"
+
+    info_text += "\n<b>Виберіть дію:</b>"
+
+    # Store URL data for callback
     if redis:
         await redis.set_cached(
             f"pending_url:{message.from_user.id}:{processing_msg.message_id}",
-            {"url": url, "platform": platform, "info": video_info},
+            {
+                "url": url,
+                "platform": platform,
+                "info": media_info,
+                "has_video": has_video,
+                "has_photo": has_photo,
+                "is_carousel": is_carousel,
+            },
             ttl=300  # 5 minutes
         )
 
-    # Send quality selection
+    # Select keyboard based on content type
+    if has_video:
+        keyboard = get_quality_keyboard(
+            url,
+            platform,
+            processing_msg.message_id,
+            show_audio=platform == "youtube"
+        )
+    else:
+        keyboard = get_media_keyboard(
+            url,
+            platform,
+            processing_msg.message_id,
+            is_carousel=is_carousel
+        )
+
+    # Send info with thumbnail if available
     try:
         if thumbnail:
-            # Delete processing message and send new one with thumbnail
             await processing_msg.delete()
             await message.reply_photo(
                 photo=thumbnail,
                 caption=info_text,
-                reply_markup=get_quality_keyboard(
-                    url,
-                    platform,
-                    processing_msg.message_id,
-                    show_audio=platform == "youtube"
-                )
+                reply_markup=keyboard
             )
         else:
             await processing_msg.edit_text(
                 info_text,
-                reply_markup=get_quality_keyboard(
-                    url,
-                    platform,
-                    processing_msg.message_id,
-                    show_audio=platform == "youtube"
-                )
+                reply_markup=keyboard
             )
     except TelegramBadRequest as e:
         logger.error(f"Error updating message: {e}")
+        # Fallback to text only
+        try:
+            await processing_msg.edit_text(
+                info_text,
+                reply_markup=keyboard
+            )
+        except:
+            pass
 
 
 def get_platform_emoji(platform: str) -> str:
@@ -176,6 +222,7 @@ def get_platform_emoji(platform: str) -> str:
         "reddit": "🤖",
         "threads": "🧵",
         "twitch": "🟣",
+        "pinterest": "📌",
     }
     return emojis.get(platform, "🎬")
 

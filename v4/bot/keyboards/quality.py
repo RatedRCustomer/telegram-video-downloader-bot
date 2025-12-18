@@ -1,5 +1,5 @@
 """
-Quality selection keyboards
+Quality selection and media download keyboards
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,7 +11,7 @@ def get_quality_keyboard(
     msg_id: int,
     show_audio: bool = False
 ) -> InlineKeyboardMarkup:
-    """Get quality selection keyboard"""
+    """Get quality selection keyboard for video downloads"""
     keyboard = [
         [
             InlineKeyboardButton(
@@ -49,6 +49,50 @@ def get_quality_keyboard(
                 callback_data=f"audio:{msg_id}"
             ),
         ])
+
+    # Cancel button
+    keyboard.append([
+        InlineKeyboardButton(
+            text="❌ Скасувати",
+            callback_data="cancel"
+        ),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def get_media_keyboard(
+    url: str,
+    platform: str,
+    msg_id: int,
+    is_carousel: bool = False
+) -> InlineKeyboardMarkup:
+    """Get keyboard for photo/media downloads"""
+    keyboard = []
+
+    # Download button
+    if is_carousel:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="📥 Завантажити всі фото",
+                callback_data=f"media:all:{msg_id}"
+            ),
+        ])
+    else:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="📥 Завантажити фото",
+                callback_data=f"media:photo:{msg_id}"
+            ),
+        ])
+
+    # Option with caption
+    keyboard.append([
+        InlineKeyboardButton(
+            text="💬 З підписом (цитата)",
+            callback_data=f"media:caption:{msg_id}"
+        ),
+    ])
 
     # Cancel button
     keyboard.append([
