@@ -159,14 +159,69 @@ class BotApp:
 
         return self.app
 
-    def run(self):
-        """Run the bot"""
+    async def run_polling(self):
+        """Run bot in polling mode"""
+        # Initialize bot
+        self.bot = Bot(
+            token=self.config.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
+
+        # Initialize Redis
+        self.redis_client = RedisClient(self.config.redis_url)
+        try:
+            await self.redis_client.connect()
+            logger.info("Redis connected")
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {e}, continuing without cache")
+
+        # Initialize database
+        try:
+            await init_db(self.config.database_url)
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.warning(f"Database init failed: {e}, continuing without DB")
+
+        # Create dispatcher
+        self.dp = self.create_dispatcher()
+
+        # Store config and redis in dispatcher for handlers to access
+        self.dp["config"] = self.config
+        self.dp["redis"] = self.redis_client
+
+        # Delete any existing webhook
+        await self.bot.delete_webhook(drop_pending_updates=True)
+
+        logger.info("Starting bot in polling mode...")
+
+        # Start polling
+        try:
+            await self.dp.start_polling(
+                self.bot,
+                allowed_updates=["message", "callback_query", "inline_query"]
+            )
+        finally:
+            await self.bot.session.close()
+            if self.redis_client:
+                await self.redis_client.close()
+
+    def run_webhook(self):
+        """Run bot in webhook mode"""
         app = self.create_app()
         web.run_app(
             app,
             host="0.0.0.0",
             port=self.config.webhook_port,
         )
+
+    def run(self):
+        """Run the bot in appropriate mode"""
+        if self.config.webhook_url:
+            logger.info("Running in webhook mode")
+            self.run_webhook()
+        else:
+            logger.info("Running in polling mode")
+            asyncio.run(self.run_polling())
 
 
 def main():
