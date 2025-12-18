@@ -1,34 +1,43 @@
-# 🎥 Telegram Video Downloader Bot v3.2
+# 🎥 Telegram Video Downloader Bot v4.0
 
 Production-ready Telegram bot для завантаження відео з YouTube, TikTok, Instagram, Threads, Twitch та інших платформ.
 
 ## ✨ Features
 
+### Core Features
 - 🎯 **Auto-quality** - автоматично вибирає найкращу якість до 50MB
 - 🖼 **Thumbnail preview** - показує прев'ю відео перед завантаженням
 - 🔗 **Inline mode** - `@bot_username URL` працює в будь-якому чаті
 - 🎵 Audio extraction (MP3)
 - 📊 Quality selection (360p-1080p)
-- 🇺🇦 Ukrainian subtitles
 - ⚡ Smart cache (миттєві повторні завантаження)
 - 👥 Group support (auto-download без тегів)
 - 🍪 Instagram cookies support (приватні відео)
-- 📊 Prometheus metrics
-- 🛡️ Rate limiting (30s/user, 10s/group)
+
+### v4.0 Architecture (NEW!)
+- 🚀 **aiogram** - сучасний async бот фреймворк
+- 🔄 **Celery + Redis** - розподілена черга задач
+- 🌐 **Webhook mode** - замість polling для швидшого відгуку
+- 🐘 **PostgreSQL** - надійне зберігання даних
+- 📦 **MinIO** - S3-сумісне сховище для файлів
+- 🌸 **Flower** - моніторинг воркерів
+- 📊 **Real-time progress** - прогрес завантаження в реальному часі
 
 ## 🌐 Supported Platforms (9)
 
 - YouTube / YouTube Shorts
 - TikTok
-- Instagram Reels
+- Instagram Reels / Stories
 - Twitter/X
 - Facebook
 - Reddit
 - Pinterest
-- **Threads** (Meta) 🆕
-- **Twitch Clips** 🆕
+- **Threads** (Meta)
+- **Twitch Clips**
 
 ## 🚀 Quick Start
+
+### v4.0 (Recommended for production)
 
 ```bash
 # 1. Clone repository
@@ -37,14 +46,117 @@ cd telegram-video-bot
 
 # 2. Configure
 cp .env.example .env
-nano .env  # Add your TELEGRAM_BOT_TOKEN
+nano .env  # Add your TELEGRAM_BOT_TOKEN and other settings
 
-# 3. Deploy
-docker compose up -d
+# 3. Deploy v4.0
+docker compose -f docker-compose.v4.yml up -d
 
-# 4. Check logs
-docker compose logs -f
+# 4. Run migrations
+docker compose -f docker-compose.v4.yml exec bot alembic upgrade head
+
+# 5. Check logs
+docker compose -f docker-compose.v4.yml logs -f
 ```
+
+### v3.x (Legacy)
+
+```bash
+docker compose up -d
+```
+
+## 🏗 v4.0 Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Telegram                              │
+└────────────────────────────┬────────────────────────────────┘
+                             │ Webhook
+┌────────────────────────────▼────────────────────────────────┐
+│                    aiogram Bot (8443)                        │
+│                  - Webhook handler                           │
+│                  - Rate limiting                             │
+│                  - User tracking                             │
+└────────────┬─────────────────────────────────┬──────────────┘
+             │                                 │
+┌────────────▼────────────┐     ┌──────────────▼──────────────┐
+│      Redis (6379)       │     │     PostgreSQL (5432)       │
+│   - Task queue          │     │   - Video cache             │
+│   - Progress pub/sub    │     │   - User stats              │
+│   - Rate limiting       │     │   - Download history        │
+│   - Caching             │     │   - Group stats             │
+└────────────┬────────────┘     └─────────────────────────────┘
+             │
+┌────────────▼────────────────────────────────────────────────┐
+│                   Celery Workers                             │
+│  ┌─────────────────────┐    ┌─────────────────────┐        │
+│  │  Download Worker    │    │   Upload Worker     │        │
+│  │  (queue: downloads) │    │  (queue: uploads)   │        │
+│  │  concurrency: 2     │    │  concurrency: 3     │        │
+│  └──────────┬──────────┘    └──────────┬──────────┘        │
+└─────────────┼──────────────────────────┼────────────────────┘
+              │                          │
+┌─────────────▼──────────────────────────▼────────────────────┐
+│                    yt-dlp Service                            │
+│                  - Video download API                        │
+│                  - Info extraction                           │
+│                  - Format selection                          │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+┌─────────────────────────────▼───────────────────────────────┐
+│                   MinIO Storage (9000)                       │
+│                  - S3-compatible storage                     │
+│                  - /mnt/archive mount                        │
+│                  - Downloaded videos                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 📝 Configuration
+
+### Environment Variables (v4.0)
+
+```env
+# Telegram
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+WEBHOOK_URL=https://your-domain.com
+WEBHOOK_PATH=/webhook
+WEBHOOK_PORT=8443
+ADMIN_IDS=123456789,987654321
+
+# Database
+DATABASE_URL=postgresql+asyncpg://videobot:password@postgres:5432/videobot
+
+# Redis
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/1
+CELERY_RESULT_BACKEND=redis://redis:6379/2
+
+# MinIO Storage
+MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=your_secure_password
+MINIO_BUCKET=videos
+MINIO_SECURE=false
+
+# yt-dlp Service
+YTDLP_SERVICE_URL=http://yt-dlp-api:8081
+
+# Limits
+MAX_FILE_SIZE=50000000
+RATE_LIMIT_PER_MINUTE=10
+```
+
+### Docker Compose Services (v4.0)
+
+| Service | Port | Description |
+|---------|------|-------------|
+| `bot` | 8443 | aiogram bot with webhook |
+| `worker-download` | - | Celery download workers |
+| `worker-upload` | - | Celery upload workers |
+| `redis` | 6379 | Task queue & caching |
+| `postgres` | 5432 | Persistent database |
+| `minio` | 9000/9001 | S3-compatible storage |
+| `flower` | 5555 | Celery monitoring |
+| `yt-dlp-api` | 8081 | Video download API |
 
 ## 🔗 Inline Mode
 
@@ -69,76 +181,40 @@ docker compose logs -f
 3. Перезапустіть контейнери
 
 ```bash
-docker compose restart
+docker compose -f docker-compose.v4.yml restart
 ```
-
-## 📊 Performance
-
-| Метрика | Значення |
-|---------|----------|
-| Response time | 5-10s (first download) |
-| Cache hit | ~1s ⚡ |
-| Max concurrent | 2 downloads |
-| Platforms | 9 |
-| Cache efficiency | 85%+ |
-
-## 🔧 Architecture
-
-```
-┌──────────────────┐
-│   Telegram Bot   │
-│   (Inline mode)  │
-└────────┬─────────┘
-         │
-┌────────▼─────────┐     ┌──────────┐
-│   yt-dlp API     │────►│  SQLite  │
-│  (Auto-quality)  │     │  Cache   │
-└────────┬─────────┘     └──────────┘
-         │
-┌────────▼─────────┐
-│    Downloads     │
-│    /downloads    │
-└──────────────────┘
-```
-
-## 📝 Configuration
-
-### Environment Variables
-
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-YT_DLP_API_URL=http://yt-dlp-api:8081
-MAX_FILE_SIZE=50000000
-```
-
-### Docker Compose Services
-
-| Service | Description |
-|---------|-------------|
-| `telegram-bot` | Telegram bot handler |
-| `yt-dlp-api` | Video download API |
-| `cleanup-service` | Auto cleanup old files |
 
 ## 📊 Monitoring
 
-Prometheus metrics endpoint: `http://localhost:8081/metrics`
+### Flower Dashboard
+Web UI для моніторингу Celery воркерів: `http://localhost:5555`
 
-Available metrics:
-- `downloads_total` - Total downloads by platform
-- `cache_hits_total` - Cache hit count
-- `cache_misses_total` - Cache miss count
-- `active_downloads` - Currently active downloads
-- `queue_size` - Download queue size
-- `cache_size_mb` - Cache size in MB
+### MinIO Console
+Web UI для керування файлами: `http://localhost:9001`
+
+### Health Endpoints
+- Bot health: `http://localhost:8443/health`
+- Bot metrics: `http://localhost:8443/metrics`
+
+## 📊 Performance
+
+| Метрика | v3.x | v4.0 |
+|---------|------|------|
+| Response time | 5-10s | 2-5s |
+| Cache hit | ~1s | ~0.5s |
+| Max concurrent | 2 | 5+ |
+| Scalability | Single server | Horizontal |
+| Progress tracking | No | Real-time |
 
 ## 🎯 Commands
 
 | Command | Description |
 |---------|-------------|
 | `/start` | Bot welcome message |
-| `/audio [URL]` | Download audio only (MP3) |
-| `/stats` | Cache statistics |
-| `/group_help` | Help for group usage |
+| `/help` | Detailed help |
+| `/stats` | Your download statistics |
+| `/settings` | Bot settings |
+| `/admin` | Admin panel (admins only) |
 
 ## 👥 Group Usage
 
@@ -148,13 +224,32 @@ Available metrics:
 
 ## 📋 Requirements
 
+### v4.0 Production
+- Docker & Docker Compose
+- 8GB+ RAM (recommended)
+- 4 CPU cores
+- 50GB+ storage
+- External storage mount for MinIO (`/mnt/archive`)
+
+### v3.x Legacy
 - Docker & Docker Compose
 - 4GB+ RAM
 - 10GB+ storage
 
 ## 🔄 Changelog
 
-### v3.2 (current)
+### v4.0 (current)
+- 🚀 Complete architecture rewrite
+- 🤖 aiogram instead of pyTelegramBotAPI
+- 🔄 Celery + Redis for task queue
+- 🌐 Webhook mode instead of polling
+- 🐘 PostgreSQL instead of SQLite
+- 📦 MinIO S3-compatible storage
+- 📊 Real-time progress tracking
+- 🌸 Flower monitoring dashboard
+- ⚡ Horizontal scaling support
+
+### v3.2
 - ✨ Inline mode - use bot in any chat
 - 🎯 Auto-quality selection (best under 50MB)
 - 🖼 Thumbnail preview before download
@@ -176,6 +271,26 @@ Available metrics:
 ### v1.0
 - Basic video download
 
+## 🔧 Migration from v3.x to v4.0
+
+```bash
+# 1. Stop v3.x
+docker compose down
+
+# 2. Backup data (optional)
+cp -r downloads downloads_backup
+cp -r bot_data bot_data_backup
+
+# 3. Start v4.0
+docker compose -f docker-compose.v4.yml up -d
+
+# 4. Run migrations
+docker compose -f docker-compose.v4.yml exec bot alembic upgrade head
+
+# 5. Verify
+docker compose -f docker-compose.v4.yml logs -f bot
+```
+
 ## 📄 License
 
 MIT License - see LICENSE file
@@ -183,5 +298,6 @@ MIT License - see LICENSE file
 ## 🙏 Acknowledgments
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [pyTelegramBotAPI](https://github.com/eternnoir/pyTelegramBotAPI)
-- [gallery-dl](https://github.com/mikf/gallery-dl)
+- [aiogram](https://github.com/aiogram/aiogram)
+- [Celery](https://github.com/celery/celery)
+- [MinIO](https://min.io/)
