@@ -5,7 +5,7 @@ Supports videos, photos, carousels with captions
 
 import logging
 import re
-from urllib.parse import urlparse
+from typing import Any
 
 from aiogram import Router, F
 from aiogram.types import Message
@@ -34,7 +34,7 @@ URL_PATTERN = re.compile(
 
 
 @router.message(F.text.regexp(URL_PATTERN))
-async def handle_media_url(message: Message):
+async def handle_media_url(message: Message, config: Any = None, redis: Any = None):
     """Handle messages containing media URLs (videos, photos, carousels)"""
     # Extract URL from message
     match = URL_PATTERN.search(message.text)
@@ -59,10 +59,6 @@ async def handle_media_url(message: Message):
         f"Платформа: {platform.title()}\n\n"
         f"⏳ Отримання інформації..."
     )
-
-    # Get media info from Celery task
-    redis = message.bot.get("redis")
-    config = message.bot.get("config")
 
     # Try to get from cache
     cache_key = f"media_info:{url}"
@@ -109,21 +105,21 @@ async def handle_media_url(message: Message):
         return
 
     # Determine content type
-    has_video = media_info.get('has_video', False)
-    has_photo = media_info.get('has_photo', False)
-    is_carousel = media_info.get('is_carousel', False)
-    media_count = media_info.get('media_count', 1)
+    has_video = media_info.get('has_video', False) if media_info else False
+    has_photo = media_info.get('has_photo', False) if media_info else False
+    is_carousel = media_info.get('is_carousel', False) if media_info else False
+    media_count = media_info.get('media_count', 1) if media_info else 1
 
     # Format info message
-    title = media_info.get('title', '')[:100]
-    description = media_info.get('description', '')[:300]
-    uploader = media_info.get('uploader', '')
-    thumbnail = media_info.get('thumbnail')
+    title = media_info.get('title', '')[:100] if media_info else ''
+    description = media_info.get('description', '')[:300] if media_info else ''
+    uploader = media_info.get('uploader', '') if media_info else ''
+    thumbnail = media_info.get('thumbnail') if media_info else None
 
     # Build info message
     if has_video:
         media_type = "🎬 Відео"
-        duration = media_info.get('media', [{}])[0].get('duration', 0) if media_info.get('media') else 0
+        duration = media_info.get('media', [{}])[0].get('duration', 0) if media_info and media_info.get('media') else 0
         duration_str = format_duration(duration)
     elif has_photo:
         if is_carousel:

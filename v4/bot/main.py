@@ -120,9 +120,9 @@ class BotApp:
         # Create dispatcher
         self.dp = self.create_dispatcher()
 
-        # Store config and redis in bot for handlers to access
-        self.bot["config"] = self.config
-        self.bot["redis"] = self.redis_client
+        # Store config and redis in dispatcher for handlers to access
+        self.dp["config"] = self.config
+        self.dp["redis"] = self.redis_client
 
         # Create web app
         self.app = web.Application()
