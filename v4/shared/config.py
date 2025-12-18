@@ -2,46 +2,52 @@
 Configuration for Video Bot v4.0
 """
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List
 
 
 @dataclass
 class Config:
     # Telegram
-    bot_token: str = os.getenv('TELEGRAM_BOT_TOKEN', '')
-    webhook_url: Optional[str] = os.getenv('WEBHOOK_URL')
-    webhook_path: str = os.getenv('WEBHOOK_PATH', '/webhook')
-    webhook_port: int = int(os.getenv('WEBHOOK_PORT', '8443'))
+    bot_token: str = field(default_factory=lambda: os.getenv('TELEGRAM_BOT_TOKEN', ''))
+    webhook_url: Optional[str] = field(default_factory=lambda: os.getenv('WEBHOOK_URL'))
+    webhook_path: str = field(default_factory=lambda: os.getenv('WEBHOOK_PATH', '/webhook'))
+    webhook_port: int = field(default_factory=lambda: int(os.getenv('WEBHOOK_PORT', '8443')))
+    admin_ids: List[int] = field(default_factory=lambda: [
+        int(x) for x in os.getenv('ADMIN_IDS', '').split(',') if x.strip().isdigit()
+    ])
 
     # Redis
-    redis_url: str = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url: str = field(default_factory=lambda: os.getenv('REDIS_URL', 'redis://localhost:6379/0'))
+    celery_broker_url: str = field(default_factory=lambda: os.getenv('CELERY_BROKER_URL', os.getenv('REDIS_URL', 'redis://localhost:6379/0')))
+    celery_result_backend: str = field(default_factory=lambda: os.getenv('CELERY_RESULT_BACKEND', os.getenv('REDIS_URL', 'redis://localhost:6379/0')))
 
     # PostgreSQL
-    database_url: str = os.getenv('DATABASE_URL', 'postgresql://videobot:videobot@localhost:5432/videobot')
+    database_url: str = field(default_factory=lambda: os.getenv('DATABASE_URL', 'postgresql://videobot:videobot@localhost:5432/videobot'))
 
     # MinIO
-    minio_endpoint: str = os.getenv('MINIO_ENDPOINT', 'localhost:9000')
-    minio_access_key: str = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
-    minio_secret_key: str = os.getenv('MINIO_SECRET_KEY', 'minioadmin123')
-    minio_bucket: str = os.getenv('MINIO_BUCKET', 'videos')
-    minio_secure: bool = os.getenv('MINIO_SECURE', 'false').lower() == 'true'
+    minio_endpoint: str = field(default_factory=lambda: os.getenv('MINIO_ENDPOINT', 'localhost:9000'))
+    minio_access_key: str = field(default_factory=lambda: os.getenv('MINIO_ACCESS_KEY', 'minioadmin'))
+    minio_secret_key: str = field(default_factory=lambda: os.getenv('MINIO_SECRET_KEY', 'minioadmin123'))
+    minio_bucket: str = field(default_factory=lambda: os.getenv('MINIO_BUCKET', 'videos'))
+    minio_secure: bool = field(default_factory=lambda: os.getenv('MINIO_SECURE', 'false').lower() == 'true')
+
+    # yt-dlp service
+    ytdlp_service_url: str = field(default_factory=lambda: os.getenv('YTDLP_SERVICE_URL', 'http://yt-dlp-api:8081'))
 
     # Limits
-    max_file_size: int = int(os.getenv('MAX_FILE_SIZE', 50_000_000))  # 50MB
-    rate_limit_user: int = int(os.getenv('RATE_LIMIT_USER', 30))  # seconds
-    rate_limit_group: int = int(os.getenv('RATE_LIMIT_GROUP', 10))  # seconds
+    max_file_size: int = field(default_factory=lambda: int(os.getenv('MAX_FILE_SIZE', '50000000')))
+    rate_limit_per_minute: int = field(default_factory=lambda: int(os.getenv('RATE_LIMIT_PER_MINUTE', '10')))
+    rate_limit_user: int = field(default_factory=lambda: int(os.getenv('RATE_LIMIT_USER', '30')))
+    rate_limit_group: int = field(default_factory=lambda: int(os.getenv('RATE_LIMIT_GROUP', '10')))
 
     # Paths
-    download_path: str = os.getenv('DOWNLOAD_PATH', '/downloads')
-    cookies_path: str = os.getenv('COOKIES_PATH', '/cookies/cookies.txt')
+    download_path: str = field(default_factory=lambda: os.getenv('DOWNLOAD_PATH', '/downloads'))
+    cookies_path: str = field(default_factory=lambda: os.getenv('COOKIES_PATH', '/cookies/cookies.txt'))
 
     # Cache TTL
-    cache_ttl: int = int(os.getenv('CACHE_TTL', 86400 * 7))  # 7 days
-    info_cache_ttl: int = int(os.getenv('INFO_CACHE_TTL', 3600))  # 1 hour
-
-
-config = Config()
+    cache_ttl: int = field(default_factory=lambda: int(os.getenv('CACHE_TTL', str(86400 * 7))))
+    info_cache_ttl: int = field(default_factory=lambda: int(os.getenv('INFO_CACHE_TTL', '3600')))
 
 
 # Supported platforms
