@@ -497,13 +497,22 @@ async def send_file_to_telegram(
                     width = progress_data.get("width")
                     height = progress_data.get("height")
 
+                    # Convert to int, handling string floats
+                    def safe_int(val):
+                        if val is None:
+                            return None
+                        try:
+                            return int(float(val))
+                        except:
+                            return None
+
                     await bot.send_video(
                         chat_id=chat_id,
                         video=input_file,
                         caption=caption,
-                        duration=int(duration) if duration else None,
-                        width=int(width) if width else None,
-                        height=int(height) if height else None,
+                        duration=safe_int(duration),
+                        width=safe_int(width),
+                        height=safe_int(height),
                         supports_streaming=True,
                     )
 
