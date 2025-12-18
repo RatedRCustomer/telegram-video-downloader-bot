@@ -120,7 +120,7 @@ services:
       - MINIO_BUCKET=videos
     volumes:
       - ./downloads:/downloads
-      - ./cookies:/cookies:ro
+      - ./cookies:/cookies
     networks:
       - bot-network
     depends_on:
