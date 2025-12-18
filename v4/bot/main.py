@@ -5,18 +5,19 @@ Main application with aiogram and webhook support
 
 import asyncio
 import logging
+import os
 import sys
-from contextlib import asynccontextmanager
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher, Router
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 
 # Add shared to path
 sys.path.insert(0, '/app/shared')
 
+# Import shared modules (using absolute imports since they're added to path)
 from config import Config
 from redis_client import RedisClient
 from models import init_db
@@ -32,136 +33,146 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global instances
-config = Config()
-redis_client: RedisClient = None
-bot: Bot = None
-dp: Dispatcher = None
 
+class BotApp:
+    """Main bot application"""
 
-async def on_startup(app: web.Application):
-    """Initialize services on startup"""
-    global redis_client, bot
+    def __init__(self):
+        self.config = Config()
+        self.redis_client: RedisClient = None
+        self.bot: Bot = None
+        self.dp: Dispatcher = None
+        self.app: web.Application = None
 
-    logger.info("Starting bot...")
+    async def on_startup(self, app: web.Application):
+        """Initialize services on startup"""
+        logger.info("Starting bot...")
 
-    # Initialize Redis
-    redis_client = RedisClient(config.redis_url)
-    await redis_client.connect()
-    logger.info("Redis connected")
+        # Initialize Redis
+        self.redis_client = RedisClient(self.config.redis_url)
+        try:
+            await self.redis_client.connect()
+            logger.info("Redis connected")
+        except Exception as e:
+            logger.warning(f"Redis connection failed: {e}, continuing without cache")
 
-    # Initialize database
-    await init_db(config.database_url)
-    logger.info("Database initialized")
+        # Initialize database
+        try:
+            await init_db(self.config.database_url)
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.warning(f"Database init failed: {e}, continuing without DB")
 
-    # Set webhook
-    webhook_url = f"{config.webhook_url}{config.webhook_path}"
-    await bot.set_webhook(
-        url=webhook_url,
-        allowed_updates=["message", "callback_query", "inline_query"],
-        drop_pending_updates=True
-    )
-    logger.info(f"Webhook set to {webhook_url}")
-
-
-async def on_shutdown(app: web.Application):
-    """Cleanup on shutdown"""
-    global redis_client, bot
-
-    logger.info("Shutting down...")
-
-    # Remove webhook
-    await bot.delete_webhook()
-
-    # Close Redis
-    if redis_client:
-        await redis_client.close()
-
-    # Close bot session
-    await bot.session.close()
-
-    logger.info("Shutdown complete")
-
-
-def create_dispatcher() -> Dispatcher:
-    """Create and configure dispatcher with routers"""
-    dispatcher = Dispatcher()
-
-    # Add middlewares
-    dispatcher.message.middleware(RateLimitMiddleware(redis_client, config))
-    dispatcher.message.middleware(UserTrackingMiddleware())
-    dispatcher.callback_query.middleware(UserTrackingMiddleware())
-
-    # Include routers
-    dispatcher.include_router(commands.router)
-    dispatcher.include_router(messages.router)
-    dispatcher.include_router(callbacks.router)
-    dispatcher.include_router(inline.router)
-
-    return dispatcher
-
-
-def create_app() -> web.Application:
-    """Create aiohttp web application"""
-    global bot, dp
-
-    # Initialize bot
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-    )
-
-    # Create dispatcher
-    dp = create_dispatcher()
-
-    # Store config and redis in dispatcher for handlers
-    dp["config"] = config
-    dp["redis"] = redis_client
-    dp["bot"] = bot
-
-    # Create web app
-    app = web.Application()
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-
-    # Setup webhook handler
-    webhook_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot,
-    )
-    webhook_handler.register(app, path=config.webhook_path)
-
-    # Health check endpoint
-    async def health_check(request):
-        return web.json_response({
-            "status": "ok",
-            "version": "4.0.0",
-            "redis": redis_client is not None and redis_client._redis is not None
-        })
-
-    app.router.add_get("/health", health_check)
-
-    # Metrics endpoint for monitoring
-    async def metrics(request):
-        if redis_client:
-            stats = await redis_client.get_stats()
+        # Set webhook if URL is configured
+        if self.config.webhook_url:
+            webhook_url = f"{self.config.webhook_url}{self.config.webhook_path}"
+            await self.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=["message", "callback_query", "inline_query"],
+                drop_pending_updates=True
+            )
+            logger.info(f"Webhook set to {webhook_url}")
         else:
-            stats = {}
-        return web.json_response(stats)
+            logger.info("No webhook URL configured, running in polling mode")
 
-    app.router.add_get("/metrics", metrics)
+    async def on_shutdown(self, app: web.Application):
+        """Cleanup on shutdown"""
+        logger.info("Shutting down...")
 
-    return app
+        # Remove webhook
+        if self.config.webhook_url:
+            await self.bot.delete_webhook()
+
+        # Close Redis
+        if self.redis_client:
+            await self.redis_client.close()
+
+        # Close bot session
+        await self.bot.session.close()
+
+        logger.info("Shutdown complete")
+
+    def create_dispatcher(self) -> Dispatcher:
+        """Create and configure dispatcher with routers"""
+        dispatcher = Dispatcher()
+
+        # Add middlewares
+        dispatcher.message.middleware(RateLimitMiddleware(self.redis_client, self.config))
+        dispatcher.message.middleware(UserTrackingMiddleware())
+        dispatcher.callback_query.middleware(UserTrackingMiddleware())
+
+        # Include routers
+        dispatcher.include_router(commands.router)
+        dispatcher.include_router(messages.router)
+        dispatcher.include_router(callbacks.router)
+        dispatcher.include_router(inline.router)
+
+        return dispatcher
+
+    def create_app(self) -> web.Application:
+        """Create aiohttp web application"""
+        # Initialize bot
+        self.bot = Bot(
+            token=self.config.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+        )
+
+        # Create dispatcher
+        self.dp = self.create_dispatcher()
+
+        # Store config and redis in bot for handlers to access
+        self.bot["config"] = self.config
+        self.bot["redis"] = self.redis_client
+
+        # Create web app
+        self.app = web.Application()
+        self.app.on_startup.append(self.on_startup)
+        self.app.on_shutdown.append(self.on_shutdown)
+
+        # Setup webhook handler
+        webhook_handler = SimpleRequestHandler(
+            dispatcher=self.dp,
+            bot=self.bot,
+        )
+        webhook_handler.register(self.app, path=self.config.webhook_path)
+
+        # Health check endpoint
+        async def health_check(request):
+            redis_ok = self.redis_client is not None and self.redis_client._redis is not None
+            return web.json_response({
+                "status": "ok",
+                "version": "4.0.0",
+                "redis": redis_ok
+            })
+
+        self.app.router.add_get("/health", health_check)
+
+        # Metrics endpoint for monitoring
+        async def metrics(request):
+            if self.redis_client:
+                stats = await self.redis_client.get_stats()
+            else:
+                stats = {}
+            return web.json_response(stats)
+
+        self.app.router.add_get("/metrics", metrics)
+
+        return self.app
+
+    def run(self):
+        """Run the bot"""
+        app = self.create_app()
+        web.run_app(
+            app,
+            host="0.0.0.0",
+            port=self.config.webhook_port,
+        )
 
 
 def main():
     """Main entry point"""
-    app = create_app()
-    web.run_app(
-        app,
-        host="0.0.0.0",
-        port=config.webhook_port,
-    )
+    bot_app = BotApp()
+    bot_app.run()
 
 
 if __name__ == "__main__":

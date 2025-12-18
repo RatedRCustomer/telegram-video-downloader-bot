@@ -10,23 +10,32 @@ from datetime import timedelta
 from minio import Minio
 from minio.error import S3Error
 
-from .config import config
-
 
 class StorageClient:
     """MinIO storage client"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        endpoint: str = None,
+        access_key: str = None,
+        secret_key: str = None,
+        bucket: str = None,
+        secure: bool = False
+    ):
+        self.endpoint = endpoint or os.getenv('MINIO_ENDPOINT', 'localhost:9000')
+        self.access_key = access_key or os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
+        self.secret_key = secret_key or os.getenv('MINIO_SECRET_KEY', 'minioadmin123')
+        self.bucket = bucket or os.getenv('MINIO_BUCKET', 'videos')
+        self.secure = secure
         self.client: Optional[Minio] = None
-        self.bucket = config.minio_bucket
 
     def connect(self):
         """Connect to MinIO"""
         self.client = Minio(
-            config.minio_endpoint,
-            access_key=config.minio_access_key,
-            secret_key=config.minio_secret_key,
-            secure=config.minio_secure
+            self.endpoint,
+            access_key=self.access_key,
+            secret_key=self.secret_key,
+            secure=self.secure
         )
 
         # Ensure bucket exists
@@ -151,7 +160,3 @@ class StorageClient:
             'total_files': total_count,
             'total_size_mb': total_size / (1024 * 1024),
         }
-
-
-# Global instance
-storage = StorageClient()
