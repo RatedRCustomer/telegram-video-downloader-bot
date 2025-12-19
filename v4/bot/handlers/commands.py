@@ -149,6 +149,93 @@ async def cmd_settings(message: Message):
     )
 
 
+@router.message(Command("audio"))
+async def cmd_audio(message: Message):
+    """Handle /audio command - download audio from URL"""
+    import asyncio
+    from uuid import uuid4
+    from celery import Celery
+    from utils.url_validator import is_valid_url, detect_platform
+
+    # Get URL from command arguments
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer(
+            "🎵 <b>Завантаження аудіо</b>\n\n"
+            "Використання: <code>/audio URL</code>\n\n"
+            "Приклад:\n"
+            "<code>/audio https://youtube.com/watch?v=...</code>\n"
+            "<code>/audio https://music.youtube.com/watch?v=...</code>"
+        )
+        return
+
+    url = args[1].strip()
+
+    if not is_valid_url(url):
+        await message.answer("❌ Невірне або непідтримуване посилання")
+        return
+
+    platform = detect_platform(url)
+
+    # Send processing message
+    processing_msg = await message.reply(
+        f"🎵 <b>Завантаження аудіо...</b>\n\n"
+        f"🔗 Платформа: {platform.title()}\n"
+        f"⏳ Прогрес: 0%"
+    )
+
+    # Get config and redis from dispatcher
+    config = message.bot.get("config")
+    redis = message.bot.get("redis")
+
+    # Create download task
+    download_id = str(uuid4())
+
+    if redis:
+        await redis.set_cached(
+            f"download:{download_id}",
+            {
+                "user_id": message.from_user.id,
+                "chat_id": message.chat.id,
+                "message_id": processing_msg.message_id,
+                "url": url,
+                "platform": platform,
+                "quality": "audio",
+                "title": "Аудіо",
+                "type": "audio",
+            },
+            ttl=3600
+        )
+
+    # Send task to Celery
+    broker_url = config.celery_broker_url if config else 'redis://redis:6379/0'
+    result_backend = config.celery_result_backend if config else 'redis://redis:6379/0'
+    celery_app = Celery('tasks', broker=broker_url, backend=result_backend)
+
+    celery_app.send_task(
+        'tasks.download_video',
+        args=[download_id, url, platform, 'best', 'audio'],
+        queue='downloads'
+    )
+
+    logger.info(f"Audio download task {download_id} sent for {url}")
+
+    # Import and start progress monitoring
+    from handlers.callbacks import monitor_download_progress
+    asyncio.create_task(
+        monitor_download_progress(
+            message.bot,
+            redis,
+            config,
+            download_id,
+            message.chat.id,
+            processing_msg.message_id,
+            "Аудіо",
+            media_type="audio"
+        )
+    )
+
+
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
     """Handle /admin command - admin panel"""

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(
     r'https?://(?:www\.)?'
     r'(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/|'
+    r'music\.youtube\.com/watch\?v=|'
     r'instagram\.com/(?:p/|reel/|reels/|stories/|tv/)|'
     r'tiktok\.com/|vm\.tiktok\.com/|'
     r'twitter\.com/|x\.com/|'
