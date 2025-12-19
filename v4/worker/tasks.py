@@ -125,22 +125,28 @@ def get_format_options(platform: str, quality: str, format_type: str, download_i
         if quality == 'auto':
             # Prefer formats under 50MB, fallback to 720p, then best available
             fmt = (
-                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/'
-                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/'
-                'best[height<=720]/best'
+                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/'
+                'bestvideo[height<=720]+bestaudio/'
+                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
+                'bestvideo[height<=1080]+bestaudio/'
+                'best[height<=720]/'
+                'best/'
+                'bestaudio'
             )
         else:
             height = {'360p': 360, '480p': 480, '720p': 720, '1080p': 1080}.get(quality, 720)
             fmt = (
                 f'bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/'
                 f'bestvideo[height<={height}]+bestaudio/'
-                f'best[height<={height}]/best'
+                f'best[height<={height}]/'
+                f'best/'
+                f'bestaudio'
             )
         return {
             **base_opts,
             'format': fmt,
             'merge_output_format': 'mp4',
-            'writesubtitles': False,  # Disable subtitles for now to avoid issues
+            'writesubtitles': False,
             'writeautomaticsub': False,
         }
 
@@ -584,8 +590,6 @@ def get_media_info(url: str, platform: str):
             'extract_flat': False,
             'skip_download': True,
             'ignoreerrors': True,
-            # Don't specify format to avoid "format not available" errors
-            # yt-dlp will just extract info without checking formats
             **get_cookies_opts()
         }
 
@@ -607,7 +611,7 @@ def get_media_info(url: str, platform: str):
             if not entry:
                 continue
 
-            formats = entry.get('formats', [])
+            formats = entry.get('formats', []) or []
             entry_has_video = any(f.get('vcodec', 'none') != 'none' for f in formats)
 
             if entry_has_video:
@@ -615,7 +619,7 @@ def get_media_info(url: str, platform: str):
                 qualities = []
                 for f in formats:
                     height = f.get('height')
-                    if height and f.get('vcodec', 'none') != 'none':
+                    if height and isinstance(height, (int, float)) and f.get('vcodec', 'none') != 'none':
                         filesize = f.get('filesize') or f.get('filesize_approx')
                         qualities.append({'height': height, 'filesize': filesize})
 
@@ -623,7 +627,7 @@ def get_media_info(url: str, platform: str):
                     'type': 'video',
                     'thumbnail': entry.get('thumbnail'),
                     'duration': entry.get('duration'),
-                    'qualities': sorted(qualities, key=lambda x: x['height'], reverse=True)[:5],
+                    'qualities': sorted(qualities, key=lambda x: x['height'] or 0, reverse=True)[:5],
                 })
             else:
                 thumbnail = entry.get('thumbnail')
