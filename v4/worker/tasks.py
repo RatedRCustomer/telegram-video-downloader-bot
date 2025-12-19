@@ -582,6 +582,10 @@ def get_media_info(url: str, platform: str):
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
+            'skip_download': True,
+            'ignoreerrors': True,
+            # Don't specify format to avoid "format not available" errors
+            # yt-dlp will just extract info without checking formats
             **get_cookies_opts()
         }
 
