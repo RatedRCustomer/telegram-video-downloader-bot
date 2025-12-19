@@ -151,7 +151,22 @@ async def handle_media_url(message: Message, config: Any = None, redis: Any = No
 
     info_text += "\n<b>Виберіть дію:</b>"
 
-    # Store URL data for callback
+    # Check for default quality setting for this chat
+    default_quality = None
+    if redis and has_video:
+        chat_settings = await redis.get_cached(f"chat_settings:{message.chat.id}")
+        if chat_settings:
+            default_quality = chat_settings.get("default_quality")
+
+    # If default quality is set and it's a video, start download immediately
+    if default_quality and has_video:
+        await start_auto_download(
+            message, processing_msg, url, platform, default_quality,
+            title, media_info, redis, config
+        )
+        return
+
+    # Store URL data for callback (only if not auto-downloading)
     if redis:
         await redis.set_cached(
             f"pending_url:{message.from_user.id}:{processing_msg.message_id}",
@@ -206,6 +221,72 @@ async def handle_media_url(message: Message, config: Any = None, redis: Any = No
             )
         except:
             pass
+
+
+async def start_auto_download(
+    message, processing_msg, url: str, platform: str, quality: str,
+    title: str, media_info: dict, redis, config
+):
+    """Start automatic download with default quality"""
+    import asyncio
+    from uuid import uuid4
+    from celery import Celery
+
+    # Update message to show downloading
+    await processing_msg.edit_text(
+        f"⬇️ <b>Автоматичне завантаження...</b>\n\n"
+        f"📹 {title[:50] if title else 'Відео'}\n"
+        f"📊 Якість: {quality}\n"
+        f"⏳ Прогрес: 0%"
+    )
+
+    # Create download task
+    download_id = str(uuid4())
+
+    # Store download info for progress tracking
+    if redis:
+        await redis.set_cached(
+            f"download:{download_id}",
+            {
+                "user_id": message.from_user.id,
+                "chat_id": message.chat.id,
+                "message_id": processing_msg.message_id,
+                "url": url,
+                "platform": platform,
+                "quality": quality,
+                "title": title[:50] if title else "Відео",
+                "type": "video",
+            },
+            ttl=3600
+        )
+
+    # Send task to Celery
+    broker_url = config.celery_broker_url if config else 'redis://redis:6379/0'
+    result_backend = config.celery_result_backend if config else 'redis://redis:6379/0'
+    celery_app = Celery('tasks', broker=broker_url, backend=result_backend)
+
+    celery_app.send_task(
+        'tasks.download_video',
+        args=[download_id, url, platform, quality, 'video'],
+        queue='downloads'
+    )
+
+    logger.info(f"Auto download task {download_id} sent for {url} with quality {quality}")
+
+    # Start progress monitoring
+    from handlers.callbacks import monitor_download_progress
+    asyncio.create_task(
+        monitor_download_progress(
+            message.bot,
+            redis,
+            config,
+            download_id,
+            message.chat.id,
+            processing_msg.message_id,
+            title[:50] if title else "Відео",
+            media_type="video"
+        )
+    )
 
 
 def get_platform_emoji(platform: str) -> str:
