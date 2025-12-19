@@ -4,7 +4,7 @@ User tracking middleware for analytics
 
 import logging
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery, TelegramObject
@@ -16,6 +16,10 @@ class UserTrackingMiddleware(BaseMiddleware):
     """
     Middleware to track user activity and update statistics.
     """
+
+    def __init__(self, redis_client=None):
+        self.redis = redis_client
+        super().__init__()
 
     async def __call__(
         self,
@@ -52,8 +56,8 @@ class UserTrackingMiddleware(BaseMiddleware):
                     "title": getattr(chat, 'title', None),
                 }
 
-            # Update last seen in Redis
-            redis = data.get("redis") or event.bot.get("redis")
+            # Update last seen in Redis - use self.redis or get from data
+            redis = self.redis or data.get("redis")
             if redis:
                 try:
                     await redis.set_cached(

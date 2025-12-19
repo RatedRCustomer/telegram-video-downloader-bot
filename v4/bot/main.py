@@ -48,13 +48,13 @@ class BotApp:
         """Initialize services on startup"""
         logger.info("Starting bot...")
 
-        # Initialize Redis
-        self.redis_client = RedisClient(self.config.redis_url)
-        try:
-            await self.redis_client.connect()
-            logger.info("Redis connected")
-        except Exception as e:
-            logger.warning(f"Redis connection failed: {e}, continuing without cache")
+        # Connect Redis (already initialized in create_app)
+        if self.redis_client:
+            try:
+                await self.redis_client.connect()
+                logger.info("Redis connected")
+            except Exception as e:
+                logger.warning(f"Redis connection failed: {e}, continuing without cache")
 
         # Initialize database
         try:
@@ -96,10 +96,10 @@ class BotApp:
         """Create and configure dispatcher with routers"""
         dispatcher = Dispatcher()
 
-        # Add middlewares
+        # Add middlewares (pass redis_client to all middlewares)
         dispatcher.message.middleware(RateLimitMiddleware(self.redis_client, self.config))
-        dispatcher.message.middleware(UserTrackingMiddleware())
-        dispatcher.callback_query.middleware(UserTrackingMiddleware())
+        dispatcher.message.middleware(UserTrackingMiddleware(self.redis_client))
+        dispatcher.callback_query.middleware(UserTrackingMiddleware(self.redis_client))
 
         # Include routers
         dispatcher.include_router(commands.router)
@@ -117,7 +117,10 @@ class BotApp:
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
 
-        # Create dispatcher
+        # Pre-initialize Redis client (will be connected in on_startup)
+        self.redis_client = RedisClient(self.config.redis_url)
+
+        # Create dispatcher (needs redis_client to be set)
         self.dp = self.create_dispatcher()
 
         # Store config and redis in dispatcher for handlers to access

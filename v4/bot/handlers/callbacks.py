@@ -314,6 +314,122 @@ async def handle_cancel(callback: CallbackQuery, **kwargs):
         pass
 
 
+@router.callback_query(F.data == "help")
+async def handle_help_callback(callback: CallbackQuery, **kwargs):
+    """Handle help button callback"""
+    await callback.answer()
+
+    help_text = """
+<b>📖 Довідка</b>
+
+<b>Завантаження відео:</b>
+Просто надішліть посилання на відео з підтримуваної платформи.
+
+<b>Вибір якості:</b>
+• <b>Авто</b> - найкраща якість до 50MB
+• <b>1080p</b> - Full HD
+• <b>720p</b> - HD (рекомендовано)
+• <b>480p</b> - SD
+• <b>360p</b> - Низька якість
+
+<b>Особливості:</b>
+• 🎵 Для YouTube можна завантажити тільки аудіо
+• 📱 Instagram потребує cookies для Stories
+• ⏱ Максимальна тривалість: 30 хвилин
+
+<b>Команди:</b>
+/audio URL - завантажити аудіо
+/help - ця довідка
+/settings - налаштування
+/stats - статистика
+
+<b>Inline режим:</b>
+В будь-якому чаті напишіть:
+<code>@botname https://youtube.com/watch?v=...</code>
+"""
+
+    from keyboards.main import get_main_keyboard
+    await callback.message.edit_text(
+        help_text,
+        reply_markup=get_main_keyboard()
+    )
+
+
+@router.callback_query(F.data == "stats")
+async def handle_stats_callback(callback: CallbackQuery, redis=None, **kwargs):
+    """Handle stats button callback"""
+    await callback.answer()
+
+    user_id = callback.from_user.id
+
+    if redis:
+        stats = await redis.get_cached(f"user_stats:{user_id}")
+    else:
+        stats = None
+
+    if stats:
+        stats_text = f"""
+<b>📊 Ваша статистика</b>
+
+📥 Завантажено відео: <b>{stats.get('downloads', 0)}</b>
+📦 Загальний розмір: <b>{stats.get('total_size_mb', 0):.1f} MB</b>
+⏱ Середній час: <b>{stats.get('avg_time_sec', 0):.1f} сек</b>
+
+<b>По платформах:</b>
+• YouTube: {stats.get('youtube', 0)}
+• Instagram: {stats.get('instagram', 0)}
+• TikTok: {stats.get('tiktok', 0)}
+• Twitter: {stats.get('twitter', 0)}
+• Інші: {stats.get('other', 0)}
+
+<b>Улюблена якість:</b> {stats.get('favorite_quality', '720p')}
+"""
+    else:
+        stats_text = """
+<b>📊 Ваша статистика</b>
+
+У вас ще немає завантажень.
+Надішліть посилання на відео, щоб почати!
+"""
+
+    from keyboards.main import get_main_keyboard
+    await callback.message.edit_text(
+        stats_text,
+        reply_markup=get_main_keyboard()
+    )
+
+
+@router.callback_query(F.data == "settings")
+async def handle_settings_callback(callback: CallbackQuery, **kwargs):
+    """Handle settings button callback"""
+    await callback.answer()
+
+    settings_text = """
+<b>⚙️ Налаштування</b>
+
+Виберіть опцію для зміни:
+"""
+
+    from keyboards.main import get_settings_keyboard
+    await callback.message.edit_text(
+        settings_text,
+        reply_markup=get_settings_keyboard()
+    )
+
+
+@router.callback_query(F.data == "back_to_main")
+async def handle_back_to_main(callback: CallbackQuery, **kwargs):
+    """Handle back to main menu button"""
+    await callback.answer()
+
+    from keyboards.main import get_main_keyboard
+    await callback.message.edit_text(
+        "🏠 <b>Головне меню</b>\n\n"
+        "Надішліть посилання на відео для завантаження.",
+        reply_markup=get_main_keyboard()
+    )
+
+
 @router.callback_query(F.data.startswith("settings:"))
 async def handle_settings(callback: CallbackQuery, **kwargs):
     """Handle settings callbacks"""
@@ -325,7 +441,8 @@ async def handle_settings(callback: CallbackQuery, **kwargs):
         from keyboards.quality import get_default_quality_keyboard
         await callback.message.edit_text(
             "<b>⚙️ Якість за замовчуванням</b>\n\n"
-            "Виберіть якість, яка буде використовуватися автоматично:",
+            "Виберіть якість, яка буде використовуватися автоматично:\n\n"
+            "<i>Після вибору бот буде завантажувати відео без запитання.</i>",
             reply_markup=get_default_quality_keyboard()
         )
     elif action == "notifications":
@@ -334,6 +451,40 @@ async def handle_settings(callback: CallbackQuery, **kwargs):
             "Ця функція в розробці.",
             reply_markup=None
         )
+
+
+@router.callback_query(F.data.startswith("set_quality:"))
+async def handle_set_default_quality(callback: CallbackQuery, redis=None, **kwargs):
+    """Handle setting default quality for chat"""
+    await callback.answer("✅ Збережено!")
+
+    # Parse quality from callback data
+    quality = callback.data.split(":")[1]
+    chat_id = callback.message.chat.id
+
+    # Save default quality for this chat in Redis
+    if redis:
+        await redis.set_cached(
+            f"chat_settings:{chat_id}",
+            {"default_quality": quality},
+            ttl=86400 * 365  # 1 year
+        )
+
+    quality_names = {
+        "auto": "✨ Авто (найкраща до 50MB)",
+        "1080p": "1080p (Full HD)",
+        "720p": "720p (HD)",
+        "480p": "480p (SD)",
+        "360p": "360p (Низька якість)",
+    }
+
+    from keyboards.main import get_settings_keyboard
+    await callback.message.edit_text(
+        f"<b>⚙️ Якість за замовчуванням</b>\n\n"
+        f"✅ Встановлено: <b>{quality_names.get(quality, quality)}</b>\n\n"
+        f"<i>Тепер відео будуть завантажуватися автоматично без запитання якості.</i>",
+        reply_markup=get_settings_keyboard()
+    )
 
 
 def get_celery_app(config):
