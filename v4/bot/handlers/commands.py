@@ -150,7 +150,7 @@ async def cmd_settings(message: Message):
 
 
 @router.message(Command("audio"))
-async def cmd_audio(message: Message):
+async def cmd_audio(message: Message, config=None, redis=None):
     """Handle /audio command - download audio from URL"""
     import asyncio
     from uuid import uuid4
@@ -183,10 +183,6 @@ async def cmd_audio(message: Message):
         f"🔗 Платформа: {platform.title()}\n"
         f"⏳ Прогрес: 0%"
     )
-
-    # Get config and redis from dispatcher
-    config = message.bot.get("config")
-    redis = message.bot.get("redis")
 
     # Create download task
     download_id = str(uuid4())
@@ -237,10 +233,8 @@ async def cmd_audio(message: Message):
 
 
 @router.message(Command("admin"))
-async def cmd_admin(message: Message):
+async def cmd_admin(message: Message, config=None):
     """Handle /admin command - admin panel"""
-    config = message.bot.get("config")
-
     if not config or message.from_user.id not in config.admin_ids:
         await message.answer("⛔️ Доступ заборонено")
         return
