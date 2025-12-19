@@ -110,7 +110,7 @@ def get_format_options(platform: str, quality: str, format_type: str, download_i
     if format_type == 'audio':
         return {
             **base_opts,
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -118,28 +118,38 @@ def get_format_options(platform: str, quality: str, format_type: str, download_i
             }]
         }
 
-    # Auto quality
-    if quality == 'auto':
-        format_str = 'bestvideo[filesize<50M]+bestaudio/best[filesize<50M]/bestvideo[height<=720]+bestaudio/best[height<=720]/best'
-    else:
-        height = {'360p': 360, '480p': 480, '720p': 720, '1080p': 1080}.get(quality, 720)
-        format_str = f'best[height<={height}]/best'
-
-    # Platform-specific options
+    # Platform-specific options for YouTube/Reddit
     if platform in ['youtube', 'reddit']:
+        # More flexible format selection for YouTube
+        # Try best formats first, then fall back to combined formats
         if quality == 'auto':
-            fmt = 'bestvideo[filesize<50M]+bestaudio/best[filesize<50M]/bestvideo[height<=720]+bestaudio/best'
+            # Prefer formats under 50MB, fallback to 720p, then best available
+            fmt = (
+                'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/'
+                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/'
+                'best[height<=720]/best'
+            )
         else:
             height = {'360p': 360, '480p': 480, '720p': 720, '1080p': 1080}.get(quality, 720)
-            fmt = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
+            fmt = (
+                f'bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/'
+                f'bestvideo[height<={height}]+bestaudio/'
+                f'best[height<={height}]/best'
+            )
         return {
             **base_opts,
             'format': fmt,
             'merge_output_format': 'mp4',
-            'writesubtitles': platform == 'youtube',
-            'writeautomaticsub': platform == 'youtube',
-            'subtitleslangs': ['uk', 'en', 'ru'] if platform == 'youtube' else [],
+            'writesubtitles': False,  # Disable subtitles for now to avoid issues
+            'writeautomaticsub': False,
         }
+
+    # Generic format for other platforms
+    if quality == 'auto':
+        format_str = 'bestvideo[height<=720]+bestaudio/best[height<=720]/best'
+    else:
+        height = {'360p': 360, '480p': 480, '720p': 720, '1080p': 1080}.get(quality, 720)
+        format_str = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
 
     return {
         **base_opts,

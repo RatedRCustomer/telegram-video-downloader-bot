@@ -8,7 +8,7 @@ from typing import Optional
 
 # Supported domains
 SUPPORTED_DOMAINS = {
-    'youtube': ['youtube.com', 'youtu.be', 'youtube-nocookie.com'],
+    'youtube': ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'music.youtube.com'],
     'instagram': ['instagram.com'],
     'tiktok': ['tiktok.com', 'vm.tiktok.com'],
     'twitter': ['twitter.com', 'x.com'],
@@ -25,6 +25,7 @@ URL_PATTERNS = {
         r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w-]+',
         r'youtube\.com/embed/[\w-]+',
         r'youtube-nocookie\.com/embed/[\w-]+',
+        r'music\.youtube\.com/watch\?v=[\w-]+',
     ],
     'instagram': [
         r'instagram\.com/(?:p|reel|reels|tv)/[\w-]+',
