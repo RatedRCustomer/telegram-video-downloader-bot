@@ -55,9 +55,15 @@ def get_minio_client():
 
 
 def get_cookies_opts():
+    opts = {
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     if os.path.exists(COOKIES_PATH):
-        return {'cookiefile': COOKIES_PATH}
-    return {}
+        print(f"✅ Found cookies at {COOKIES_PATH}")
+        opts['cookiefile'] = COOKIES_PATH
+    else:
+        print(f"⚠️ No cookies found at {COOKIES_PATH}")
+    return opts
 
 
 def update_progress(download_id: str, progress: float, status: str = 'downloading', extra: dict = None):
@@ -155,6 +161,7 @@ def get_format_options(platform: str, quality: str, format_type: str, download_i
 @app.task(bind=True, name='tasks.download_video', queue='downloads', max_retries=2)
 def download_video(self, download_id: str, url: str, platform: str, quality: str = '720p', format_type: str = 'video'):
     try:
+        file_path = None
         update_progress(download_id, 0, 'starting')
 
         # Twitter pre-check
@@ -181,64 +188,165 @@ def download_video(self, download_id: str, url: str, platform: str, quality: str
             title = info.get('title', 'video')[:100]
             description = info.get('description', '')[:1000]
 
+
+    except Exception as e:
+        # Fallback to gallery-dl for Instagram
+        if platform == 'instagram':
+            print(f"YT-DLP failed for Instagram, trying gallery-dl: {e}")
+            update_progress(download_id, 30, 'downloading_fallback')
+            
+            gdl_file = download_with_gallery_dl(url, download_id, platform)
+            if gdl_file:
+                file_path = gdl_file
+                # If we don't have info from yt-dlp, create dummy info
+                if 'info' not in locals():
+                    info = {
+                        'title': 'Instagram Video',
+                        'description': 'Downloaded via gallery-dl',
+                        'duration': 0,
+                        'width': 0,
+                        'height': 0,
+                        'thumbnail': None
+                    }
+                    title = info['title']
+                    description = info['description']
+            else:
+                # Both failed
+                update_progress(download_id, 0, 'error')
+                error_msg = str(e)[:200]
+                return {'error': f"Failed to download: {error_msg}", 'status': 'error'}
+        else:
+            update_progress(download_id, 0, 'error')
+            error_msg = str(e)[:200]
+            print(f"Download error for {url}: {error_msg}")
+            return {'error': error_msg, 'status': 'error'}
+
+    if not file_path:
+        # Try to find file if not set by fallback (standard yt-dlp path)
         download_dir = Path(DOWNLOAD_PATH)
-        file_path = None
         for f in download_dir.glob(f"{download_id}_*"):
             if f.is_file() and f.stat().st_size > 1000:
                 file_path = str(f)
                 break
 
-        if not file_path:
-            update_progress(download_id, 0, 'error')
-            return {'error': 'Файл не знайдено після завантаження', 'status': 'error'}
-
-        update_progress(download_id, 95, 'uploading')
-
-        minio = get_minio_client()
-        ext = Path(file_path).suffix.lstrip('.') or 'mp4'
-        object_key = f"{platform}/{download_id}.{ext}"
-
-        content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
-        minio.fput_object(MINIO_BUCKET, object_key, file_path, content_type=content_type)
-
-        file_size = os.path.getsize(file_path)
-        try:
-            os.remove(file_path)
-        except:
-            pass
-
-        update_progress(download_id, 100, 'completed', {
-            'file_key': object_key,
-            'file_size': file_size,
-            'title': title,
-            'description': description,
-            'thumbnail': info.get('thumbnail'),
-            'duration': info.get('duration'),
-            'width': info.get('width'),
-            'height': info.get('height'),
-        })
-
-        return {
-            'status': 'completed',
-            'type': 'video',
-            'file_key': object_key,
-            'file_size': file_size,
-            'title': title,
-            'description': description,
-            'platform': platform,
-            'quality': quality,
-            'format': format_type,
-            'duration': info.get('duration'),
-            'width': info.get('width'),
-            'height': info.get('height'),
-            'thumbnail': info.get('thumbnail'),
-        }
-
-    except Exception as e:
+    if not file_path:
         update_progress(download_id, 0, 'error')
-        error_msg = str(e)[:200]
-        print(f"Download error for {url}: {error_msg}")
-        return {'error': error_msg, 'status': 'error'}
+        return {'error': 'Файл не знайдено після завантаження', 'status': 'error'}
+
+    update_progress(download_id, 95, 'uploading')
+
+    minio = get_minio_client()
+    ext = Path(file_path).suffix.lstrip('.') or 'mp4'
+    object_key = f"{platform}/{download_id}.{ext}"
+
+    content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
+    minio.fput_object(MINIO_BUCKET, object_key, file_path, content_type=content_type)
+
+    file_size = os.path.getsize(file_path)
+    try:
+        os.remove(file_path)
+    except:
+        pass
+
+    update_progress(download_id, 100, 'completed', {
+        'file_key': object_key,
+        'file_size': file_size,
+        'title': title,
+        'description': description,
+        'thumbnail': info.get('thumbnail'),
+        'duration': info.get('duration'),
+        'width': info.get('width'),
+        'height': info.get('height'),
+    })
+
+    return {
+        'status': 'completed',
+        'type': 'video',
+        'file_key': object_key,
+        'file_size': file_size,
+        'title': title,
+        'description': description,
+        'platform': platform,
+        'quality': quality,
+        'format': format_type,
+        'duration': info.get('duration'),
+        'width': info.get('width'),
+        'height': info.get('height'),
+        'thumbnail': info.get('thumbnail'),
+    }
+
+
+def download_with_gallery_dl(url: str, download_id: str, platform: str) -> Optional[str]:
+    """Fallback download using gallery-dl"""
+    try:
+        print(f"Starting gallery-dl for {url}")
+        
+        # Configure gallery-dl
+        config = {
+            'base-directory': DOWNLOAD_PATH,
+            'filename': f'{download_id}_gdl_{{id}}.{{extension}}',
+            'skip': False
+        }
+        
+        # Enhanced Instagram config with User-Agent
+        if platform == 'instagram':
+            config['extractor'] = {
+                'instagram': {
+                    'videos': True,
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+            }
+            
+        config_path = f'/tmp/gdl_{download_id}.json'
+        with open(config_path, 'w') as f:
+            json.dump(config, f)
+
+        # Select best cookies file
+        cookies_file = COOKIES_PATH
+        if platform == 'instagram' and os.path.exists('/cookies/instagram.txt'):
+             cookies_file = '/cookies/instagram.txt'
+            
+        cmd = [
+            'gallery-dl',
+            '--config', config_path,
+            '--cookies', cookies_file,
+            url
+        ]
+        
+        # Run with timeout
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        
+        # Cleanup config
+        if os.path.exists(config_path):
+            try:
+                os.unlink(config_path)
+            except:
+                pass
+                
+        if result.returncode != 0:
+            print(f"Gallery-dl error: {result.stderr}")
+            return None
+            
+        # Find the downloaded file
+        download_dir = Path(DOWNLOAD_PATH)
+        # We need to find the specific file downloaded for this ID
+        # Since we used {download_id}_gdl_{id}, we can glob for it
+        candidates = list(download_dir.glob(f"{download_id}_gdl_*"))
+        
+        # Filter for video files larger than 1KB
+        valid_files = [f for f in candidates if f.is_file() and f.stat().st_size > 1000 and f.suffix.lower() in ['.mp4', '.webm', '.mov']]
+        
+        if valid_files:
+            # Return the largest file (likely the main video)
+            largest_file = max(valid_files, key=lambda f: f.stat().st_size)
+            print(f"Gallery-dl downloaded: {largest_file}")
+            return str(largest_file)
+            
+        return None
+        
+    except Exception as e:
+        print(f"Gallery-dl exception: {e}")
+        return None
 
 
 @app.task(bind=True, name='tasks.download_media', queue='downloads', max_retries=2)
@@ -326,7 +434,19 @@ def get_media_info(url: str, platform: str):
             info = ydl.extract_info(url, download=False)
 
         if not info:
-            return {'error': 'Could not extract info'}
+            print(f"Could not extract info for {url}, returning fallback")
+            return {
+                'title': 'Instagram Media' if 'instagram' in url else 'Media Content',
+                'description': '',
+                'uploader': 'Unknown',
+                'platform': platform,
+                'has_video': True,
+                'has_photo': False,
+                'is_carousel': False,
+                'media_count': 1,
+                'media': [{'type': 'video', 'qualities': []}],
+                'thumbnail': None,
+            }
 
         # CRITICAL FIX: Handle case where 'entries' exists but is None
         entries = info.get('entries')
@@ -383,4 +503,17 @@ def get_media_info(url: str, platform: str):
         }
 
     except Exception as e:
-        return {'error': str(e)[:200]}
+        print(f"Error extracting info for {url}: {e}")
+        # Fallback to allow download attempt even if info extraction fails
+        return {
+            'title': 'Instagram Media' if 'instagram' in url else 'Media Content',
+            'description': '', # Return empty description as requested by user ("If no description, also download")
+            'uploader': 'Unknown',
+            'platform': platform,
+            'has_video': True,
+            'has_photo': False,
+            'is_carousel': False,
+            'media_count': 1,
+            'media': [{'type': 'video', 'qualities': []}],
+            'thumbnail': None,
+        }
