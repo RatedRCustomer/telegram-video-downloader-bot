@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -50,6 +51,24 @@ async def main() -> None:
     db = Database(config.db_path)
     await db.init()
     log.info("Database initialized at %s", config.db_path)
+
+    # Warn early if yt-dlp cookies file is stale; admin can refresh via /cookies.
+    if config.cookies_file:
+        cookies_path = Path(config.cookies_file)
+        if cookies_path.exists():
+            age_days = (time.time() - cookies_path.stat().st_mtime) / 86400
+            if age_days > 7:
+                log.warning(
+                    "Cookies file is %.1f days old (%s) — admin should /cookies refresh",
+                    age_days, cookies_path,
+                )
+            else:
+                log.info("Cookies file age: %.1f days", age_days)
+        else:
+            log.info(
+                "Cookies file not present (%s) — yt-dlp will run anonymously",
+                cookies_path,
+            )
 
     engine = DownloadEngine(config)
     queue = DownloadQueue(max_concurrent=config.max_concurrent_downloads)

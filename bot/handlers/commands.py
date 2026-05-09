@@ -1,11 +1,15 @@
+import logging
 import os
+from pathlib import Path
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
 from bot.config import Config
 from bot.db import Database
+
+log = logging.getLogger(__name__)
 
 router = Router()
 
@@ -16,10 +20,13 @@ _PLATFORMS = (
     "X (Twitter)",
     "Pinterest",
     "Threads",
+    "VK / VK Video",
     "SoundCloud",
     "Spotify",
     "Deezer",
 )
+
+_COOKIES_MAX_BYTES = 500_000  # cookies.txt > 500KB ~ заведено забагато / помилка експорту
 
 _START_TEXT = (
     "\U0001f44b Привіт! Я завантажую "
@@ -133,5 +140,72 @@ def setup_command_handlers(config: Config, db: Database):
                 lines.append(f"  \u2022 {platform}: {count}")
 
         await message.reply("\n".join(lines))
+
+    @router.message(Command("cookies"))
+    async def cmd_cookies(message: Message, bot: Bot):
+        # Admin-only, accepts an attached cookies.txt and writes to config.cookies_file.
+        # Use case: yt-dlp cookies expire (YouTube/Instagram/etc.) — admin reuploads via TG.
+        if not message.from_user:
+            return
+        if config.admin_ids and message.from_user.id not in config.admin_ids:
+            return
+        if not config.cookies_file:
+            await message.reply(
+                "⚠️ COOKIES_FILE не налаштовано в .env"
+            )
+            return
+
+        doc = message.document
+        if not doc:
+            await message.reply(
+                "\U0001f4ce Прикріпи <code>cookies.txt</code> з підписом "
+                "<code>/cookies</code>\n\n"
+                "Експорт з браузера: розширення "
+                "<i>Get cookies.txt LOCALLY</i> "
+                "(Chrome/Firefox).\n"
+                "Формат: Netscape HTTP Cookie File."
+            )
+            return
+        if not (doc.file_name and doc.file_name.lower().endswith(".txt")):
+            await message.reply("⚠️ Очікую .txt файл")
+            return
+        if doc.file_size and doc.file_size > _COOKIES_MAX_BYTES:
+            await message.reply(
+                f"⚠️ Файл завеликий "
+                f"({doc.file_size} > {_COOKIES_MAX_BYTES} B)"
+            )
+            return
+
+        target = Path(config.cookies_file)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await bot.download(doc, destination=target)
+        except Exception as e:
+            log.exception("Cookies download failed")
+            await message.reply(f"❌ Не вдалось завантажити: {e}")
+            return
+
+        try:
+            head = target.read_text(errors="replace")[:200]
+        except Exception as e:
+            await message.reply(f"❌ Не вдалось прочитати: {e}")
+            return
+
+        if "Netscape HTTP Cookie File" not in head:
+            await message.reply(
+                "⚠️ Це не схоже на Netscape cookies "
+                "(немає header'а). "
+                "Файл збережено, але yt-dlp може його відкинути."
+            )
+            return
+
+        size = target.stat().st_size
+        log.info(
+            "Cookies updated by admin %s, %d bytes",
+            message.from_user.id, size,
+        )
+        await message.reply(
+            f"✅ Cookies оновлено: <b>{size}</b> байт"
+        )
 
     return router
