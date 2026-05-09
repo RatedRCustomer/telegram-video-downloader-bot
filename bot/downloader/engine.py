@@ -19,9 +19,11 @@ from bot.downloader.platforms import (
 
 log = logging.getLogger(__name__)
 
-# Platforms where Cobalt API is the preferred fallback
+# Platforms where Cobalt API is the preferred fallback when yt-dlp fails or finds
+# nothing extractable. Cobalt has different cookie handling and may have residential
+# IPs that pass platform anti-bot checks.
 _COBALT_PLATFORMS = frozenset({
-    Platform.INSTAGRAM, Platform.TIKTOK, Platform.TWITTER,
+    Platform.INSTAGRAM, Platform.TIKTOK, Platform.TWITTER, Platform.VK,
 })
 
 
@@ -207,7 +209,14 @@ class DownloadEngine:
 
         # Find the actual output file (extension may differ from template)
         base = out_path.rsplit(".", 1)[0]
-        file_path = self._find_file_by_prefix(base)
+        try:
+            file_path = self._find_file_by_prefix(base)
+        except FileNotFoundError:
+            # rc=0 but nothing on disk: extractor said "0 items" (private/deleted/auth-required)
+            raise RuntimeError(
+                "yt-dlp returned no media — URL may have no video, "
+                "be private, or require authenticated cookies"
+            )
 
         title = await self._get_title(match.url)
         file_size = os.path.getsize(file_path)
