@@ -56,6 +56,12 @@ class DownloadEngine:
         quality: str = "auto",
         progress_cb=None,
     ) -> DownloadResult:
+        # TikTok photo carousels: yt-dlp doesn't handle these; Cobalt does (as "picker").
+        # We bypass yt-dlp entirely to avoid a guaranteed-fail attempt + 5s of latency.
+        if match.platform == Platform.TIKTOK and "/photo/" in match.url:
+            log.info("TikTok photo URL — routing directly to Cobalt")
+            return await self._try_cobalt(match, progress_cb)
+
         # Audio platforms: Spotify, Deezer, SoundCloud, YT Music
         if match.platform in (Platform.SPOTIFY, Platform.DEEZER):
             return await self._run_music_search(match, progress_cb)
