@@ -7,6 +7,8 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
 from bot.config import load_config
@@ -73,10 +75,22 @@ async def main() -> None:
     engine = DownloadEngine(config)
     queue = DownloadQueue(max_concurrent=config.max_concurrent_downloads)
 
-    bot = Bot(
-        token=config.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    if config.tg_api_url:
+        session = AiohttpSession(
+            api=TelegramAPIServer.from_base(config.tg_api_url, is_local=False)
+        )
+        bot = Bot(
+            token=config.bot_token,
+            session=session,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        log.info("Using local Telegram Bot API at %s", config.tg_api_url)
+    else:
+        bot = Bot(
+            token=config.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        log.info("Using Telegram cloud Bot API")
     dp = Dispatcher()
 
     register_handlers(dp, config, db, engine, queue)

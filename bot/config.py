@@ -16,6 +16,7 @@ class Config:
     audio_bitrate: int = 192
     cookies_file: str = ""
     cobalt_api_url: str = "http://cobalt:9000"
+    tg_api_url: str = ""  # empty = use cloud Telegram (50MB cap); set to http://tg-api:8081 for local server (2GB cap)
     log_level: str = "INFO"
 
 
@@ -44,5 +45,6 @@ def load_config() -> Config:
         audio_bitrate=int(os.getenv("AUDIO_BITRATE", "192")),
         cookies_file=os.getenv("COOKIES_FILE", ""),
         cobalt_api_url=os.getenv("COBALT_API_URL", "http://cobalt:9000"),
+        tg_api_url=os.getenv("TG_API_URL", "").strip(),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
