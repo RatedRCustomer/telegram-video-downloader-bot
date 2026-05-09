@@ -1,42 +1,6 @@
-# Secrets
-.env
-*.env
-.env.local
-
-# Downloads & Cache
-downloads/
-*.mp4
-*.mp3
-*.webm
-*.jpg
-*.png
-
-# Logs
-logs/
-*.log
-
-# Database
-*.db
-*.db-journal
-
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-
-# Docker
-.dockerignore
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-cookies/
+.env
+data/
+*.db
+.pytest_cache/
