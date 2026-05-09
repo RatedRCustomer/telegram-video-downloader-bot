@@ -19,6 +19,7 @@ class Platform(str, Enum):
     SOUNDCLOUD = "soundcloud"
     SPOTIFY = "spotify"
     DEEZER = "deezer"
+    VK = "vk"
 
 
 class MediaType(str, Enum):
@@ -65,6 +66,15 @@ _DOMAIN_MAP: dict[str, Platform] = {
     "open.spotify.com": Platform.SPOTIFY,
     "deezer.com": Platform.DEEZER,
     "www.deezer.com": Platform.DEEZER,
+    "vk.com": Platform.VK,
+    "www.vk.com": Platform.VK,
+    "m.vk.com": Platform.VK,
+    "vk.ru": Platform.VK,
+    "www.vk.ru": Platform.VK,
+    "m.vk.ru": Platform.VK,
+    "vkvideo.ru": Platform.VK,
+    "www.vkvideo.ru": Platform.VK,
+    "m.vkvideo.ru": Platform.VK,
 }
 
 _SHORT_URL_DOMAINS: frozenset[str] = frozenset({
@@ -76,6 +86,7 @@ _SHORT_URL_DOMAINS: frozenset[str] = frozenset({
     "deezer.page.link",
     "link.deezer.com",
     "on.soundcloud.com",
+    "vk.cc",
 })
 
 _AUDIO_PLATFORMS: frozenset[Platform] = frozenset({
@@ -96,6 +107,7 @@ _PLATFORM_TOOLS: dict[Platform, DownloadTool] = {
     Platform.PINTEREST: DownloadTool.GALLERY_DL,
     Platform.SPOTIFY: DownloadTool.YTDLP,
     Platform.DEEZER: DownloadTool.YTDLP,
+    Platform.VK: DownloadTool.YTDLP,
 }
 
 _URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")

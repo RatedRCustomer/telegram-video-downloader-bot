@@ -50,6 +50,12 @@ class TestIdentifyPlatform:
             ("https://open.spotify.com/track/abc123", Platform.SPOTIFY),
             ("https://deezer.com/track/123", Platform.DEEZER),
             ("https://www.deezer.com/en/track/123", Platform.DEEZER),
+            ("https://vk.com/video-123_456", Platform.VK),
+            ("https://www.vk.com/video123_456", Platform.VK),
+            ("https://m.vk.com/video-123_456", Platform.VK),
+            ("https://vk.ru/video-123_456", Platform.VK),
+            ("https://vkvideo.ru/video-123_456", Platform.VK),
+            ("https://vk.com/clip-123_456", Platform.VK),
         ],
     )
     def test_known_platforms(self, url, expected_platform):
@@ -105,6 +111,7 @@ class TestShortUrls:
             "https://spotify.link/abc123",
             "https://deezer.page.link/abc123",
             "https://on.soundcloud.com/abc123",
+            "https://vk.cc/abc123",
         ],
     )
     def test_short_urls_detected(self, url):
